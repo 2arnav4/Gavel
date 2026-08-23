@@ -39,3 +39,6 @@ dist-ssr/
 *.njsproj
 *.sln
 *.sw?
+
+# Local agent context, not part of the project
+CLAUDE.md
