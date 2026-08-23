@@ -20,14 +20,10 @@ import { addAuctionItem } from "../services/api";
 import { disconnectSocket, getSocket } from "../services/socket";
 import { getErrorMessage } from "../utils/error";
 
-// Mirrors the server-side caps in itemService. Enforced in both places: the
-// input stops a mistake, the service stops a crafted request.
 const ITEM_NAME_MAX_LENGTH = 80;
 const DESCRIPTION_MAX_LENGTH = 300;
 
 export function LobbyPage() {
-  // Room codes are stored uppercase, so a lowercase URL must not read as a
-  // different room and lock out a session that is actually valid.
   const { code: rawCode } = useParams<{ code: string }>();
   const code = rawCode?.toUpperCase();
   const navigate = useNavigate();
@@ -40,7 +36,6 @@ export function LobbyPage() {
     clearRoomSession,
   } = useSessionStore();
 
-  // Connect to the socket server to sync room and items state in realtime
   const {
     status: socketStatus,
     room,
@@ -51,7 +46,6 @@ export function LobbyPage() {
 
   const [copied, setCopied] = useState(false);
 
-  // Admin Item Form State
   const [itemName, setItemName] = useState("");
   const [itemDesc, setItemDesc] = useState("");
   const [itemBid, setItemBid] = useState("");
@@ -59,7 +53,6 @@ export function LobbyPage() {
   const [itemError, setItemError] = useState<string | null>(null);
   const [itemSuccess, setItemSuccess] = useState(false);
 
-  // Security check: Redirect if the user has no session or is in the wrong room
   const hasNoAccess = !sessionUsername || !sessionRole || sessionRoomCode !== code;
 
   const handleCopyCode = async () => {
@@ -74,15 +67,11 @@ export function LobbyPage() {
   };
 
   const handleLeaveRoom = () => {
-    // Leaving a room ends the room membership only. Clearing the whole session
-    // would also sign the user out while their auth cookie stayed set, so the
-    // next reload would silently sign them back in.
     disconnectSocket();
     clearRoomSession();
     navigate("/");
   };
 
-  // Submit new auction item (Admin only)
   const handleAddItem = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!code || !sessionToken) return;
@@ -109,8 +98,7 @@ export function LobbyPage() {
         itemDesc.trim(),
         bidAmount
       );
-      
-      // Clear form on success
+
       setItemName("");
       setItemDesc("");
       setItemBid("");
@@ -123,14 +111,12 @@ export function LobbyPage() {
     }
   };
 
-  // Redirect to live auction page when the room transitions to active/live status
   useEffect(() => {
     if (room?.status === "live" && code) {
       navigate(`/auction/${code}`);
     }
   }, [room?.status, code, navigate]);
 
-  // Request the server to start the auction (Admin only)
   const handleStartAuction = () => {
     const socket = getSocket();
     if (socket) {
@@ -138,9 +124,6 @@ export function LobbyPage() {
     }
   };
 
-  // Checked before the connection states: without a session token the socket can
-  // never connect, so reporting a connection failure would send the user to a
-  // dead end instead of to the join screen that actually fixes it.
   if (hasNoAccess) {
     return (
       <PageContainer className="px-4 py-12 sm:px-6 sm:py-16">
@@ -162,7 +145,6 @@ export function LobbyPage() {
     );
   }
 
-  // Show dynamic loader until we get the room details from the socket room state
   const isLoading = !room && socketStatus === "connecting";
 
   if (isLoading) {
@@ -203,16 +185,13 @@ export function LobbyPage() {
   }
 
   const isAdmin = sessionRole === "admin";
-  // The host runs the auction rather than competing in it, and is already shown
-  // in the profile card above, so listing them among the bidders both
-  // double-counts and misrepresents who you are bidding against.
   const bidders = participants.filter((participant) => participant.role !== "admin");
 
   return (
     <PageContainer className="px-4 py-12 sm:px-6 sm:py-16">
       <div className="mx-auto max-w-4xl w-full space-y-8">
-        
-        {/* Connection status header */}
+
+        {}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-6">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -239,7 +218,7 @@ export function LobbyPage() {
               {room?.name}
             </h1>
           </div>
-          
+
           <Button
             variant="ghost"
             onClick={handleLeaveRoom}
@@ -250,7 +229,7 @@ export function LobbyPage() {
           </Button>
         </div>
 
-        {/* Host Control Center banner */}
+        {}
         {isAdmin && (
           <div className="border border-amber-500/20 bg-amber-500/5 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm animate-fade-in-up">
             <div className="space-y-1">
@@ -273,9 +252,9 @@ export function LobbyPage() {
           </div>
         )}
 
-        {/* Dashboard Room/Profile Info */}
+        {}
         <div className="grid gap-6 sm:grid-cols-5">
-          {/* Room Details Card (3/5 width) */}
+          {}
           <div className="sm:col-span-3 border border-border bg-surface-raised/40 backdrop-blur-md p-6 rounded-xl space-y-6 flex flex-col justify-between shadow-lg">
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-3">
@@ -318,7 +297,7 @@ export function LobbyPage() {
             </div>
           </div>
 
-          {/* User Profile Card (2/5 width) */}
+          {}
           <div className="sm:col-span-2 border border-border bg-surface-raised/40 backdrop-blur-md p-6 rounded-xl space-y-6 flex flex-col justify-between shadow-lg">
             <div className="space-y-1.5">
               <span className="text-xs font-semibold uppercase tracking-wider text-text-muted">
@@ -360,10 +339,10 @@ export function LobbyPage() {
           </div>
         </div>
 
-        {/* Realtime Catalog & Admin Form */}
+        {}
         <div className="grid gap-6 md:grid-cols-5 items-start">
-          
-          {/* Upcoming Items List (3/5 width) */}
+
+          {}
           <div className={`${isAdmin ? "md:col-span-3" : "md:col-span-5"} border border-border bg-surface-raised/40 p-6 rounded-xl space-y-4 shadow-lg min-h-[300px] flex flex-col`}>
             <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
               <Tag className="h-4 w-4 text-accent" />
@@ -412,7 +391,7 @@ export function LobbyPage() {
             )}
           </div>
 
-          {/* Add Auction Item form (2/5 width, visible to Admin only) */}
+          {}
           {isAdmin && (
             <div className="md:col-span-2 border border-border bg-surface-raised/40 p-6 rounded-xl space-y-4 shadow-lg">
               <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
@@ -420,8 +399,7 @@ export function LobbyPage() {
                 Add Auction Item
               </span>
 
-              {/* noValidate: native constraint tooltips are unstyled OS popups
-                  that clash with the dark UI. Validation is handled below. */}
+              {}
               <form onSubmit={handleAddItem} className="space-y-4" noValidate>
                 {itemError && (
                   <div className="flex items-start gap-2.5 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-xs text-red-400">
@@ -463,7 +441,6 @@ export function LobbyPage() {
                     autoComplete="off"
                     placeholder="e.g. 500"
                     value={itemBid}
-                    // Digits only, so a negative or malformed price cannot be typed.
                     onChange={(e) => setItemBid(e.target.value.replace(/[^0-9]/g, ""))}
                     className="w-full bg-surface-overlay border border-border focus:border-accent/50 focus:ring-1 focus:ring-accent/20 rounded-lg px-3 py-2 text-xs text-text-primary placeholder:text-text-muted transition-all outline-none"
                     disabled={itemLoading}
@@ -516,7 +493,7 @@ export function LobbyPage() {
           )}
         </div>
 
-        {/* Realtime Active Presence Board */}
+        {}
         <div className="border border-border bg-surface-raised/35 p-6 rounded-xl space-y-4 shadow-sm">
           <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
             <Users className="h-3.5 w-3.5 text-accent" />

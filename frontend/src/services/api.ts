@@ -4,16 +4,8 @@ const rawApiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:3001/api";
 const sanitizedBaseUrl = rawApiUrl.replace(/\/$/, "");
 const API_URL = sanitizedBaseUrl.endsWith("/api") ? sanitizedBaseUrl : `${sanitizedBaseUrl}/api`;
 
-// A free-tier host spins the server down when idle, and the next request pays
-// the cold start. Allow for that before declaring the backend unreachable.
 const COLD_START_TIMEOUT_MS = 60_000;
 
-/**
- * The backend could not be reached at all, or reached but is not healthy.
- *
- * Distinct from a normal failed response: "nobody is logged in" is an expected
- * outcome, whereas this means the app cannot function and should say so.
- */
 export class ApiUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -42,7 +34,6 @@ export interface Participant {
   username: string;
   role: "admin" | "participant";
   sessionToken?: string;
-  /** Purse fixed at join time. Remaining is budget - spent. */
   budget: number;
   spent: number;
   isConnected: boolean;
@@ -64,27 +55,14 @@ export interface JoinResponse {
 export interface AuthResponse {
   username: string;
   role: "admin" | "participant";
-  /** Present on login/register only; mirrored into the session store. */
   token?: string;
 }
 
-/**
- * Headers for an authenticated request.
- *
- * `credentials: "include"` alone is not enough: the API lives on a different
- * registrable domain than the app, so its auth cookie is third-party, and
- * Chrome incognito plus Safari and Firefox tracking protection refuse to send
- * it. The bearer header carries the same JWT over a channel no cookie policy
- * can block. The cookie is still sent when the browser allows it.
- */
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   const token = useSessionStore.getState().authToken;
   return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
 }
 
-/**
- * Authentication Endpoints
- */
 
 export async function login(username: string, password?: string): Promise<AuthResponse> {
   const response = await fetch(`${API_URL}/auth/login`, {
@@ -148,11 +126,9 @@ export async function checkAuth(): Promise<{ user: AuthResponse | null }> {
       signal: AbortSignal.timeout(COLD_START_TIMEOUT_MS),
     });
   } catch {
-    // Network failure, DNS failure, CORS rejection or timeout.
     throw new ApiUnavailableError("Could not reach the server.");
   }
 
-  // 5xx means the backend is up but unhealthy, e.g. its database is unreachable.
   if (response.status >= 500) {
     throw new ApiUnavailableError("The server is not ready yet.");
   }
@@ -164,9 +140,6 @@ export async function checkAuth(): Promise<{ user: AuthResponse | null }> {
   return response.json();
 }
 
-/**
- * Room Endpoints
- */
 
 export async function createRoom(
   username: string,

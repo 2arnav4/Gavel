@@ -6,17 +6,6 @@ import { Participant } from "../models/participantModel.js";
 import { AuctionItem } from "../models/itemModel.js";
 import { generateUniqueRoomCode } from "../utils/codeGenerator.js";
 
-/**
- * Creates a demo room with a prepared catalog so a walkthrough does not begin
- * with several minutes of typing item names.
- *
- * Writes straight to MongoDB rather than going through the API, because the
- * host's room session token is issued at creation and is the one thing the
- * script needs to hand back — the REST client would keep it in a cookie jar
- * that the browser cannot read.
- *
- * Run with: npm run seed
- */
 
 const CATALOG = [
   {
@@ -48,12 +37,7 @@ async function seed(): Promise<void> {
   });
 
   const code = await generateUniqueRoomCode();
-  // Deliberately below the ₹85,000 catalog total. A purse that covers
-  // everything removes the only interesting decision in the auction; at this
-  // level a bidder can take the Rolex and one other lot, or spread across
-  // three, but not have all four.
   const startingBudget = 60_000;
-  // Large enough that raises move the price visibly rather than crawling.
   const minBidIncrement = 2_500;
   const room = new Room({
     code,

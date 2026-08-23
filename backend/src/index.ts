@@ -13,21 +13,12 @@ const httpServer = createServer(app);
 const io = createSocketServer(httpServer);
 app.set("io", io);
 
-// Bind the port before touching MongoDB. The database is a runtime dependency,
-// not a startup precondition: if it is unreachable the process must stay up and
-// serve 503s rather than exit, which would fail the deploy outright.
 httpServer.listen(env.port, () => {
   console.log(`Server listening on port ${env.port}`);
 });
 
-// Timers for in-flight auctions live in memory, so they can only be rebuilt once
-// the database is actually readable.
 void connectDB().then(async () => {
   try {
-    // Presence is tracked by an in-memory socket map but persisted on the
-    // participant. A restart loses the map, so any flag left set here describes a
-    // connection that no longer exists and would show that bidder as permanently
-    // online. Every live socket re-registers itself on the next room:connect.
     const { modifiedCount } = await Participant.updateMany(
       { isConnected: true },
       { $set: { isConnected: false } },

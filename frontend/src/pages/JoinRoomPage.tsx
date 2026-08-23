@@ -93,7 +93,7 @@ export function JoinRoomPage() {
             />
           </div>
 
-          {/* Identity comes from the session, so it is stated rather than asked for. */}
+          {}
           <div className="flex items-center gap-2.5 rounded-lg border border-border/50 bg-surface-overlay/40 px-3 py-2.5">
             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent/15 text-sm font-semibold text-accent">
               {username.charAt(0).toUpperCase()}

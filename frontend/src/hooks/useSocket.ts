@@ -11,7 +11,6 @@ function mergeItems(current: AuctionItem[], incoming: AuctionItem[]): AuctionIte
   return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
-/** Manages one room-scoped socket and applies server-authoritative state updates. */
 export function useSocket(roomCode: string) {
   const sessionToken = useSessionStore((state) => state.sessionToken);
   const hasSession = Boolean(roomCode && sessionToken);
@@ -20,9 +19,6 @@ export function useSocket(roomCode: string) {
   const [participants, setParticipants] = useState<Participant[]>([]);
   const [items, setItems] = useState<AuctionItem[]>([]);
   const [activeItem, setActiveItem] = useState<AuctionItem | null>(null);
-  // serverTime minus the local clock at the moment a server message arrived.
-  // Deadlines are absolute server timestamps, so counting down against an
-  // uncorrected local clock would drift by however wrong that clock is.
   const [serverClockOffset, setServerClockOffset] = useState(0);
   const [bids, setBids] = useState<Bid[]>([]);
   const [bidError, setBidError] = useState<{ reason: string; minimumBid: number } | null>(null);
@@ -56,7 +52,6 @@ export function useSocket(roomCode: string) {
       setParticipants(data.participants);
       setActiveItem(data.activeItem);
       setBids(data.bids);
-      // Merge rather than replace: a concurrent item:added event can never be lost.
       setItems((current) => mergeItems(current, data.items));
     };
     const handleParticipantJoined = (data: { participant: Participant }) => {
@@ -80,8 +75,6 @@ export function useSocket(roomCode: string) {
     const handleAuctionStarted = (data: { room: Room }) => setRoom(data.room);
     const handleItemActivated = (data: { item: AuctionItem; startedAt: string; endsAt: string }) => {
       setActiveItem(data.item);
-      // startedAt is the server's clock at activation, so it re-measures the
-      // offset on every item without needing a separate round trip.
       setServerClockOffset(Date.parse(data.startedAt) - Date.now());
       setBids([]);
       setBidError(null);
@@ -97,8 +90,6 @@ export function useSocket(roomCode: string) {
     };
     const handleBidRejected = (data: { reason: string; minimumBid: number }) => setBidError(data);
     const handleAuctionPaused = (data: { itemId: string; remainingMs: number }) => {
-      // Clearing endsAt is what freezes the countdown: the client renders the
-      // stored remainder instead of counting down to an absolute deadline.
       setActiveItem((current) => current ? { ...current, isPaused: true, endsAt: null } : current);
       setRoom((current) => current
         ? { ...current, isPaused: true, pausedRemainingMs: data.remainingMs, endsAt: null }
@@ -113,8 +104,6 @@ export function useSocket(roomCode: string) {
       setBidError(null);
     };
     const handleItemEnded = (data: { winner?: Participant | null }) => {
-      // The winner's purse changed as part of the sale, so patch it here rather
-      // than waiting for the next full state sync.
       if (data?.winner) {
         setParticipants((current) => current.map((participant) =>
           participant._id === data.winner!._id
@@ -166,12 +155,6 @@ export function useSocket(roomCode: string) {
       socket.off("item:ended", handleItemEnded);
       socket.off("auction:completed", handleAuctionCompleted);
 
-      // Deliberately not disconnecting. Moving from the lobby to the auction
-      // unmounts this hook and immediately remounts it for the same room, and a
-      // teardown in between makes every other client watch that participant go
-      // offline and back online. connectSocket only replaces the socket when the
-      // room or participant actually changes, and the Leave Room handlers
-      // disconnect explicitly.
     };
   }, [roomCode, sessionToken]);
 

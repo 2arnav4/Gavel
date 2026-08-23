@@ -13,11 +13,9 @@ const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: isProd,
   sameSite: (isProd ? "none" : "lax") as "none" | "lax" | "strict" | undefined,
-  maxAge: 24 * 60 * 60 * 1000, // 24 hours
+  maxAge: 24 * 60 * 60 * 1000,
 };
 
-// OWASP's current floor for PBKDF2-HMAC-SHA512. Stored alongside each hash so
-// this can be raised later without locking existing users out.
 const PBKDF2_ITERATIONS = 210_000;
 const PBKDF2_KEY_LENGTH = 64;
 const PBKDF2_DIGEST = "sha512";
@@ -36,11 +34,6 @@ function hashPassword(
     .toString("hex");
 }
 
-/**
- * Compares in constant time. A plain `!==` on hex strings short-circuits at the
- * first differing character, so its runtime leaks how much of a guess was
- * correct — enough, over many attempts, to reconstruct a hash byte by byte.
- */
 function verifyPassword(password: string, user: IUser): boolean {
   const candidate = Buffer.from(
     hashPassword(password, user.salt, user.hashIterations ?? 1_000),
@@ -48,7 +41,6 @@ function verifyPassword(password: string, user: IUser): boolean {
   );
   const stored = Buffer.from(user.passwordHash, "hex");
 
-  // timingSafeEqual throws on a length mismatch, which would itself be a signal.
   if (candidate.length !== stored.length) return false;
 
   return crypto.timingSafeEqual(candidate, stored);
@@ -73,17 +65,6 @@ function validatePassword(password: string): string | null {
   return null;
 }
 
-/**
- * Validates credentials and sets an HTTP-only JWT cookie.
- *
- * `demo` / `password123` is a shared demo account: each sign-in mints a
- * distinct alias so the same credentials can drive several browser windows at
- * once. Everything else is a registered account with a verified password.
- *
- * The JWT carries a role only as an account-level default. Authority inside an
- * auction comes from the participant record created at room create/join, never
- * from this token.
- */
 export async function loginHandler(
   req: Request,
   res: Response,
@@ -102,35 +83,24 @@ export async function loginHandler(
       if (password !== "password123") {
         throw new AppError("Invalid credentials for the demo account.", 401);
       }
-      // Random rather than a counter: a counter lives in process memory, so a
-      // restart replays aliases and the next demo_1 collides with the demo_1
-      // already sitting in a room.
       finalUsername = `demo_${crypto.randomBytes(3).toString("hex")}`;
     } else {
       const user = await User.findOne({
         usernameNormalized: normalizedUsername,
       });
       const suppliedPassword = requireString(password, "Password");
-      // Same message and roughly the same work whether or not the account
-      // exists, so this cannot be used to enumerate registered usernames.
       if (!user || !verifyPassword(suppliedPassword, user)) {
         throw new AppError("Invalid username or password.", 401);
       }
       finalUsername = user.username;
     }
 
-    // Sign JWT Token
     const token = jwt.sign({ username: finalUsername, role }, env.jwtSecret, {
       expiresIn: "24h",
     });
 
-    // Set Cookie
     res.cookie("token", token, COOKIE_OPTIONS);
 
-    // The token is returned as well as set as a cookie. The API and the frontend
-    // are on different registrable domains, so that cookie is third-party and is
-    // blocked by default in Chrome incognito and under Safari/Firefox tracking
-    // protection. Clients hold this and send it as a bearer header instead.
     res.status(200).json({
       username: finalUsername,
       role,
@@ -141,9 +111,6 @@ export async function loginHandler(
   }
 }
 
-/**
- * Registers a new user and sets HTTP-only JWT cookie (auto-login).
- */
 export async function registerHandler(
   req: Request,
   res: Response,
@@ -156,7 +123,6 @@ export async function registerHandler(
     const suppliedPassword = requireString(password, "Password");
     const normalizedUsername = trimmedUsername.toLowerCase();
 
-    // Prevent registering with reserved names
     if (
       normalizedUsername === "admin" ||
       normalizedUsername.startsWith("demo")
@@ -164,13 +130,11 @@ export async function registerHandler(
       throw new AppError("Username is reserved and cannot be registered.", 400);
     }
 
-    // Validate password strength
     const passwordError = validatePassword(suppliedPassword);
     if (passwordError) {
       throw new AppError(passwordError, 400);
     }
 
-    // Check if user already exists
     const existingUser = await User.findOne({
       usernameNormalized: normalizedUsername,
     });
@@ -181,11 +145,9 @@ export async function registerHandler(
       );
     }
 
-    // Hash password
     const salt = generateSalt();
     const passwordHash = hashPassword(suppliedPassword, salt, PBKDF2_ITERATIONS);
 
-    // Create user
     const user = new User({
       username: trimmedUsername,
       usernameNormalized: normalizedUsername,
@@ -195,13 +157,11 @@ export async function registerHandler(
     });
     await user.save();
 
-    // Auto-login (Sign JWT Token)
     const role = "participant";
     const token = jwt.sign({ username: trimmedUsername, role }, env.jwtSecret, {
       expiresIn: "24h",
     });
 
-    // Set Cookie
     res.cookie("token", token, COOKIE_OPTIONS);
 
     res.status(201).json({
@@ -214,9 +174,6 @@ export async function registerHandler(
   }
 }
 
-/**
- * Clears HTTP-only authentication cookie.
- */
 export async function logoutHandler(
   _req: Request,
   res: Response,
@@ -238,9 +195,6 @@ export async function logoutHandler(
   }
 }
 
-/**
- * Checks active profile details from JWT cookie.
- */
 export async function meHandler(
   req: Request,
   res: Response,
@@ -266,7 +220,6 @@ export async function meHandler(
         },
       });
     } catch (err) {
-      // Invalid/Expired token -> clear cookie and return null
       res.clearCookie("token", COOKIE_OPTIONS);
       res.status(200).json({ user: null });
     }

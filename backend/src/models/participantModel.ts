@@ -6,9 +6,7 @@ export interface IParticipant extends Document {
   usernameNormalized: string;
   role: "admin" | "participant";
   sessionToken: string;
-  /** Purse copied from the room at join time, so a later room edit cannot move it. */
   budget: number;
-  /** Total won so far. Remaining purse is budget - spent. */
   spent: number;
   isConnected: boolean;
   joinedAt: Date;
@@ -64,7 +62,6 @@ const ParticipantSchema = new Schema<IParticipant>({
   },
 });
 
-// Compound unique index so usernames are unique within a single room, regardless of case.
 ParticipantSchema.index({ roomId: 1, usernameNormalized: 1 }, { unique: true });
 
 export const Participant = mongoose.model<IParticipant>(

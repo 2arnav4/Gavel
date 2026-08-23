@@ -12,10 +12,8 @@ export function createSocketServer(httpServer: HttpServer) {
     cors: corsOptions,
   });
 
-  // Apply authentication middleware to incoming connections
   io.use(socketAuthMiddleware);
 
-  // Listen for socket connections and register event handlers
   io.on("connection", (socket) => {
     registerRoomHandlers(io, socket);
     registerAuctionHandlers(io, socket);
@@ -23,6 +21,5 @@ export function createSocketServer(httpServer: HttpServer) {
     registerResolutionHandlers(io, socket);
   });
 
-  // Timer restoration is driven from the entry point once MongoDB is connected.
   return io;
 }

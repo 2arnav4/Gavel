@@ -38,12 +38,10 @@ const BidSchema = new Schema<IBid>(
     },
   },
   {
-    timestamps: { createdAt: true, updatedAt: false }, // Only track creation time
+    timestamps: { createdAt: true, updatedAt: false },
   }
 );
 
-// The bid log is read newest-first for one item on every room:connect and after
-// every accepted bid, so it is the hottest read in the auction.
 BidSchema.index({ itemId: 1, createdAt: -1 });
 
 export const Bid = mongoose.model<IBid>("Bid", BidSchema);

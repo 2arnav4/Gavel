@@ -15,7 +15,6 @@ export function clearAuctionTimer(roomId: string): void {
   auctionTimers.delete(roomId);
 }
 
-/** Schedule an authoritative expiry for the active item in a room. */
 export function scheduleAuctionTimer(io: Server, roomId: string, endsAt: Date): void {
   clearAuctionTimer(roomId);
 
@@ -27,7 +26,6 @@ export function scheduleAuctionTimer(io: Server, roomId: string, endsAt: Date): 
   auctionTimers.set(roomId, timer);
 }
 
-/** Recreate timers after a backend restart from the persisted room state. */
 export async function restoreAuctionTimers(io: Server): Promise<void> {
   const liveRooms = await Room.find({
     status: "live",
@@ -35,8 +33,6 @@ export async function restoreAuctionTimers(io: Server): Promise<void> {
   });
 
   for (const room of liveRooms) {
-    // A paused room has no deadline to run down. It stays frozen until the host
-    // resumes, which is what re-arms its timer.
     if (room.isPaused) continue;
 
     const endsAt = room.endsAt ?? getAuctionEndsAt(Date.now(), env.auctionItemDurationSeconds);
@@ -77,8 +73,6 @@ async function progressAuction(io: Server, roomId: string): Promise<void> {
     return;
   }
 
-  // Clearing the pause here matters: an item can be sold while frozen, and the
-  // next item must not inherit a paused room it knows nothing about.
   const updatedRoom = await Room.findOneAndUpdate(
     { _id: room._id, status: "live" },
     { $set: { currentItemId: nextItem._id, endsAt, isPaused: false, pausedRemainingMs: null } },
@@ -118,16 +112,8 @@ async function resolveActiveItem(
     ? { status: "unsold", highestBidderId: null, highestBidderUsername: null }
     : { status: "sold" };
 
-  // Claim the active item conditionally. Only one simultaneous resolution can win.
   const claim: Record<string, unknown> = { _id: activeItem._id, status: "active" };
 
-  // An expiry must also prove the deadline has actually passed. A bid accepted
-  // moments before expiry pushes endsAt into the future and reschedules the
-  // timer, but clearTimeout cannot recall a callback that has already fired and
-  // is awaiting its database reads. Without this condition that stale callback
-  // still matches on status alone and ends an item that was just extended,
-  // cutting the countdown the extension was meant to protect. Host-initiated
-  // resolutions stay unconditional: selling early is the whole point.
   if (requestedResolution === "expired") {
     claim.endsAt = { $lte: new Date() };
   }
@@ -139,9 +125,6 @@ async function resolveActiveItem(
   );
   if (!resolvedItem) return null;
 
-  // Charge the winner only once the sale is final. Committing at bid time would
-  // mean refunding every outbid participant, and a refund that fails leaves the
-  // purse wrong; charging at resolution has exactly one writer per item.
   let winner = null;
   if (resolution === "sold" && resolvedItem.highestBidderId) {
     winner = await Participant.findOneAndUpdate(
@@ -164,11 +147,6 @@ async function expireActiveItem(io: Server, roomId: string): Promise<void> {
     const resolvedItem = await resolveActiveItem(io, roomId, "expired");
     if (resolvedItem) return;
 
-    // The expiry did not claim the item. Either it was already resolved, or its
-    // deadline moved into the future between this callback firing and its update.
-    // In that second case an item would otherwise be left active with no timer
-    // owning it, so re-arm from the persisted deadline. This also covers a timer
-    // that fires a fraction early, where the elapsed-deadline check would fail.
     const room = await Room.findById(roomId);
     if (!room || room.status !== "live" || !room.currentItemId) return;
 

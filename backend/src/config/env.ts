@@ -12,9 +12,6 @@ function getEnv(key: string, fallback?: string): string {
   return value;
 }
 
-// CLIENT_URL may name more than one origin, comma-separated, so a single
-// backend can serve several deployed frontends. Trailing slashes are stripped
-// here rather than at every comparison site.
 function getOriginList(key: string, fallback: string): string[] {
   const origins = getEnv(key, fallback)
     .split(",")
@@ -43,20 +40,9 @@ export const env = {
   nodeEnv,
   clientUrls: getOriginList("CLIENT_URL", "http://localhost:5173"),
   mongodbUri: getEnv("MONGODB_URI", "mongodb://localhost:27017/auction-room"),
-  // Set explicitly rather than inferred from the URI path. A connection string
-  // without a database segment makes Mongoose silently fall back to "test",
-  // which is how production data ends up somewhere nobody intended. Naming it
-  // here means the database is a property of the application, not of whatever
-  // string happens to be pasted into a hosting dashboard.
   mongodbDbName: getEnv("MONGODB_DB_NAME", "auction"),
   auctionItemDurationSeconds: getPositiveInteger("AUCTION_ITEM_DURATION_SECONDS", "60"),
-  // Every bidder in a room starts with the same purse, so the auction is a
-  // contest of allocation rather than of who is willing to type the largest
-  // number. Overridable per room at creation.
   defaultStartingBudget: getPositiveInteger("DEFAULT_STARTING_BUDGET", "100000"),
-  // The smallest legal raise. Without one, a bidder can outbid by a rupee, which
-  // makes the countdown extension meaningless: an item can be held open forever
-  // by increments that never meaningfully change the price.
   defaultMinBidIncrement: getPositiveInteger("DEFAULT_MIN_BID_INCREMENT", "500"),
   jwtSecret:
     process.env.JWT_SECRET ??

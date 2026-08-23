@@ -5,7 +5,6 @@ import { env } from "../../config/env.js";
 import { clearAuctionTimer, scheduleAuctionTimer } from "./resolutionHandler.js";
 import { getAuctionEndsAt } from "../../utils/auction.js";
 
-/** Resolves the host's room, or emits the reason it cannot act. */
 async function requireHostRoom(socket: Socket) {
   const participant = socket.data.participant;
   const cachedRoom = socket.data.room;
@@ -28,11 +27,7 @@ async function requireHostRoom(socket: Socket) {
   return room;
 }
 
-/**
- * Registers Auction-related event listeners for a given Socket instance.
- */
 export function registerAuctionHandlers(io: Server, socket: Socket): void {
-  // Event: auction:start
   socket.on("auction:start", async () => {
     try {
       const participant = socket.data.participant;
@@ -43,13 +38,11 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      // 1. Verify user is admin
       if (participant.role !== "admin") {
         socket.emit("error", { message: "Access denied: Only the room administrator can start the auction." });
         return;
       }
 
-      // 2. Fetch fresh Room document and verify status
       const freshRoom = await Room.findById(room._id);
       if (!freshRoom) {
         socket.emit("error", { message: "Room not found." });
@@ -61,7 +54,6 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      // 3. Select first pending item
       const pendingItems = await AuctionItem.find({
         roomId: freshRoom._id,
         status: "pending",
@@ -76,30 +68,25 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
       const startedAt = new Date();
       const endsAt = getAuctionEndsAt(startedAt.getTime(), env.auctionItemDurationSeconds);
 
-      // 4. Update item status to active
       activeItem.status = "active";
       activeItem.endsAt = endsAt;
       await activeItem.save();
 
-      // 5. Update room status to live and link currentItemId
       freshRoom.status = "live";
       freshRoom.currentItemId = activeItem._id;
       freshRoom.endsAt = endsAt;
       await freshRoom.save();
 
-      // Keep cached room reference inside socket.data in sync
       socket.data.room = freshRoom;
 
       const roomCode = freshRoom.code;
       const socketRoomId = `room:${roomCode}`;
       scheduleAuctionTimer(io, freshRoom._id.toString(), endsAt);
 
-      // 6. Broadcast event: auction:started
       io.to(socketRoomId).emit("auction:started", {
         room: freshRoom,
       });
 
-      // 7. Broadcast event: item:activated
       io.to(socketRoomId).emit("item:activated", {
         item: activeItem,
         startedAt: startedAt.toISOString(),
@@ -113,18 +100,11 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
     }
   });
 
-  // Event: auction:pause — freeze the countdown on the active item.
   socket.on("auction:pause", async () => {
     try {
       const room = await requireHostRoom(socket);
       if (!room) return;
 
-      // Claim the pause atomically. Two rapid clicks, or two host tabs, cannot
-      // both succeed, so the remaining time is only ever computed once.
-      //
-      // `new: false` returns the document as it was at the instant of the swap,
-      // which is the only trustworthy source for the deadline: reading endsAt
-      // separately could observe a value a concurrent bid had already extended.
       const beforePause = await AuctionItem.findOneAndUpdate(
         {
           _id: room.currentItemId,
@@ -161,7 +141,6 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
     }
   });
 
-  // Event: auction:resume — restore the countdown from where it stopped.
   socket.on("auction:resume", async () => {
     try {
       const room = await requireHostRoom(socket);
@@ -172,8 +151,6 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      // Fall back to a full window if the stored remainder is missing, so a
-      // corrupted pause can never strand an item with no deadline at all.
       const remainingMs = room.pausedRemainingMs ?? env.auctionItemDurationSeconds * 1000;
       const endsAt = new Date(Date.now() + remainingMs);
 

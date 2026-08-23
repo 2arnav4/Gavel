@@ -7,13 +7,9 @@ const SOCKET_URL = sanitizedBaseUrl.endsWith("/api") ? sanitizedBaseUrl.slice(0,
 let socket: Socket | null = null;
 let activeConnection: { roomCode: string; sessionToken: string } | null = null;
 
-/**
- * Connects the socket to the backend server with handshake authentication parameters.
- */
 export function connectSocket(roomCode: string, sessionToken: string): Socket {
   const requestedConnection = { roomCode: roomCode.toUpperCase(), sessionToken };
 
-  // Never reuse an authenticated socket for a different room or participant.
   if (socket) {
     if (
       activeConnection?.roomCode === requestedConnection.roomCode &&
@@ -42,9 +38,6 @@ export function connectSocket(roomCode: string, sessionToken: string): Socket {
   return socket;
 }
 
-/**
- * Disconnects the socket connection and cleans up the instance.
- */
 export function disconnectSocket(): void {
   if (socket) {
     socket.disconnect();
@@ -53,9 +46,6 @@ export function disconnectSocket(): void {
   }
 }
 
-/**
- * Returns the active socket instance.
- */
 export function getSocket(): Socket | null {
   return socket;
 }

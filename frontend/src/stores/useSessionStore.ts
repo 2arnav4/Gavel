@@ -8,13 +8,6 @@ export interface SessionState {
   participantId: string | null;
   role: "admin" | "participant" | null;
   authUser: { username: string; role: "admin" | "participant" } | null;
-  /**
-   * The account JWT, mirrored from the auth cookie.
-   *
-   * The cookie is third-party here (API and app are on different domains) and is
-   * blocked outright by Chrome incognito and by tracking protection, so it
-   * cannot be the only copy. Sent as a bearer header on authenticated requests.
-   */
   authToken: string | null;
   setAuthToken: (token: string | null) => void;
   setSession: (session: {
@@ -24,9 +17,7 @@ export interface SessionState {
     participantId: string;
     role: "admin" | "participant";
   }) => void;
-  /** Clears the room membership but keeps the user signed in. */
   clearRoomSession: () => void;
-  /** Clears room membership and the signed-in user. Used by logout. */
   clearSession: () => void;
   setAuthUser: (
     user: { username: string; role: "admin" | "participant" } | null,
@@ -58,7 +49,7 @@ export const useSessionStore = create<SessionState>()(
       setAuthToken: (token) => set({ authToken: token }),
     }),
     {
-      name: "auction-session", // Key used in localStorage
+      name: "auction-session",
     },
   ),
 );

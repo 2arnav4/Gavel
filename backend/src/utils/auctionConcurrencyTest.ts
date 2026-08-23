@@ -6,18 +6,6 @@ import { AuctionItem } from "../models/itemModel.js";
 import { Room } from "../models/roomModel.js";
 import { Participant } from "../models/participantModel.js";
 
-/**
- * Integration tests for the concurrency control the auction depends on.
- *
- * These exercise the exact conditional updates used by the bid and resolution
- * handlers, against a real MongoDB, because that is where the correctness lives:
- * the guarantees come from the query filters, not from application logic, so a
- * test with a mocked model would prove nothing.
- *
- * Requires a reachable MONGODB_URI. If there is none, every test is skipped
- * rather than failed, so `npm test` still passes in an environment without a
- * database.
- */
 
 let dbAvailable = false;
 let roomId: mongoose.Types.ObjectId;
@@ -62,7 +50,6 @@ async function createActiveItem(startingBid: number, endsInMs: number) {
 
 const TEST_INCREMENT = 100;
 
-/** The bid handler's claim, in full. */
 function claimBid(itemId: mongoose.Types.ObjectId, amount: number, newEndsAt: Date) {
   return AuctionItem.findOneAndUpdate(
     {
@@ -83,7 +70,6 @@ function claimBid(itemId: mongoose.Types.ObjectId, amount: number, newEndsAt: Da
   );
 }
 
-/** The host's pause claim, in full. */
 function claimPause(itemId: mongoose.Types.ObjectId) {
   return AuctionItem.findOneAndUpdate(
     { _id: itemId, status: "active", isPaused: false, endsAt: { $gt: new Date() } },
@@ -161,9 +147,6 @@ test("the increment is measured against the live price, not a stale read", async
   const later = new Date(Date.now() + 60_000);
   await claimBid(item._id as mongoose.Types.ObjectId, 1_000, later);
 
-  // Two bidders both saw ₹1,000 and both compute ₹1,100 as legal. Only one can
-  // win; the loser's amount is no longer a full increment above the new price,
-  // so it must fail rather than sneak through on a stale comparison.
   const results = await Promise.all([
     claimBid(item._id as mongoose.Types.ObjectId, 1_100, later),
     claimBid(item._id as mongoose.Types.ObjectId, 1_100, later),
@@ -197,9 +180,6 @@ test("only one of two simultaneous resolutions wins", async (t) => {
 
 test("a stale expiry cannot end an item whose deadline was extended", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
-  // The item's deadline has already been pushed into the future by an accepted
-  // bid. A timer callback fired for the previous deadline is now in flight and
-  // cannot be cancelled, so it must fail to claim the item.
   const item = await createActiveItem(100, 60_000);
 
   const staleExpiry = await AuctionItem.findOneAndUpdate(
@@ -259,8 +239,6 @@ test("a paused item cannot be expired by a timer", async (t) => {
   const item = await createActiveItem(100, 60_000);
   await claimPause(item._id as mongoose.Types.ObjectId);
 
-  // endsAt is null while paused, and null never satisfies $lte against a date,
-  // so an expiry cannot claim a frozen item however long the pause lasts.
   const expiry = await AuctionItem.findOneAndUpdate(
     { _id: item._id, status: "active", endsAt: { $lte: new Date() } },
     { $set: { status: "unsold" } },
@@ -291,8 +269,6 @@ test("a winner is charged exactly once, even if two resolutions race", async (t)
     endsAt: new Date(Date.now() - 1_000),
   });
 
-  // Both a host sell and a timer expiry fire at the same instant. Only the one
-  // that claims the item may charge the winner.
   const resolutions = await Promise.all([
     AuctionItem.findOneAndUpdate({ _id: item._id, status: "active" }, { $set: { status: "sold" } }, { new: true }),
     AuctionItem.findOneAndUpdate({ _id: item._id, status: "active" }, { $set: { status: "sold" } }, { new: true }),

@@ -3,10 +3,6 @@ import test from "node:test";
 import { AppError } from "../middleware/errorHandler.js";
 import { optionalString, requirePositiveNumber, requireString } from "./validation.js";
 
-/**
- * These exist because `value?.trim()` passed review as a guard and was not one.
- * Every case below returned a 500 before the boundary was introduced.
- */
 
 const WRONG_TYPES: [string, unknown][] = [
   ["number", 12345],

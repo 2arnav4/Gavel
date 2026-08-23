@@ -72,7 +72,6 @@ export function ResultsPage() {
     );
   }
 
-  // Calculate statistics
   const soldItems = results.filter((item) => item.status === "sold");
   const unsoldItemsCount = results.filter((item) => item.status === "unsold").length;
   const totalRevenue = soldItems.reduce((acc, curr) => acc + curr.currentBid, 0);
@@ -80,8 +79,8 @@ export function ResultsPage() {
   return (
     <PageContainer className="px-4 py-12 sm:px-6 sm:py-16 max-w-4xl">
       <div className="space-y-8">
-        
-        {/* Page Header */}
+
+        {}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-6">
           <div className="space-y-1">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-green-500/10 border border-green-500/20 px-2.5 py-0.5 text-[10px] font-bold tracking-wider text-green-400 uppercase">
@@ -106,9 +105,9 @@ export function ResultsPage() {
           </Button>
         </div>
 
-        {/* Stats Summary Panel */}
+        {}
         <div className="grid gap-4 grid-cols-1 sm:grid-cols-3">
-          {/* Revenue */}
+          {}
           <div className="border border-border bg-surface-raised/40 p-4 rounded-xl flex items-center gap-4 shadow-sm relative overflow-hidden">
             <div className="p-3 bg-green-500/10 border border-green-500/20 text-green-400 rounded-lg shrink-0">
               <DollarSign className="h-5 w-5" />
@@ -123,7 +122,7 @@ export function ResultsPage() {
             </div>
           </div>
 
-          {/* Sold Count */}
+          {}
           <div className="border border-border bg-surface-raised/40 p-4 rounded-xl flex items-center gap-4 shadow-sm relative overflow-hidden">
             <div className="p-3 bg-accent/10 border border-accent/20 text-accent rounded-lg shrink-0">
               <Award className="h-5 w-5" />
@@ -138,7 +137,7 @@ export function ResultsPage() {
             </div>
           </div>
 
-          {/* Unsold Count */}
+          {}
           <div className="border border-border bg-surface-raised/40 p-4 rounded-xl flex items-center gap-4 shadow-sm relative overflow-hidden">
             <div className="p-3 bg-zinc-500/10 border border-border text-text-muted rounded-lg shrink-0">
               <Clock className="h-5 w-5" />
@@ -154,7 +153,7 @@ export function ResultsPage() {
           </div>
         </div>
 
-        {/* Results Catalog Table */}
+        {}
         <div className="border border-border bg-surface-raised/40 rounded-xl overflow-hidden shadow-lg">
           <div className="p-5 border-b border-border/40 bg-surface-raised/60">
             <h3 className="text-sm font-semibold text-text-primary">Resolved Items Summary</h3>

@@ -51,7 +51,6 @@ export function AuthPortal() {
       return;
     }
 
-    // Client-side password validation on Sign Up
     if (!customUser && activeTab === "signup") {
       const passwordErr = validateClientPassword(targetPass);
       if (passwordErr) {
@@ -70,8 +69,6 @@ export function AuthPortal() {
       } else {
         data = await login(targetUser.trim(), targetPass ? targetPass : undefined);
       }
-      // Stored before the user, so any request triggered by the state change
-      // already has a token to send.
       setAuthToken(data.token ?? null);
       setAuthUser({ username: data.username, role: data.role });
     } catch (err: unknown) {
@@ -109,7 +106,7 @@ export function AuthPortal() {
             </div>
           )}
 
-          {/* Quick Demo Credentials Selection */}
+          {}
           <div className="space-y-2">
             <span className="text-[10px] font-semibold uppercase tracking-wider text-text-muted flex items-center gap-1.5">
               <HelpCircle className="h-3 w-3 text-accent" />
@@ -128,7 +125,7 @@ export function AuthPortal() {
             </div>
           </div>
 
-          {/* Selection Tabs */}
+          {}
           <div className="flex border-b border-border/40">
             <button
               type="button"
@@ -162,7 +159,7 @@ export function AuthPortal() {
             </button>
           </div>
 
-          {/* Input Form */}
+          {}
           <div className="space-y-4">
             <div className="space-y-1.5">
               <label

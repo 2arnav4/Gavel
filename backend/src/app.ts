@@ -15,7 +15,6 @@ export function createApp() {
   app.use(express.json());
   app.use(cookieParser());
 
-  // Health stays unguarded so it can still report during a database outage.
   app.use("/health", healthRouter);
   app.use("/api", requireDatabase, apiRouter);
 

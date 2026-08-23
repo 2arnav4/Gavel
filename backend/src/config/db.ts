@@ -7,8 +7,6 @@ const INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
 const SERVER_SELECTION_TIMEOUT_MS = 10_000;
 
-// Fail a buffered query in 5s instead of Mongoose's 10s default, so requests
-// that slip past the readiness guard surface an error quickly.
 mongoose.set("bufferTimeoutMS", 5_000);
 
 export type DatabaseStatus =
@@ -44,14 +42,6 @@ async function migrateParticipantUsernameKeys(): Promise<void> {
   await Participant.createIndexes();
 }
 
-/**
- * Backfills purse fields onto documents written before budgets existed.
- *
- * `startingBudget` is required on the room schema, so a room created earlier
- * would fail validation the moment anything saved it — which is exactly what
- * starting its auction does. Adding a required field to a collection that
- * already has rows is a migration, not a schema edit.
- */
 async function migrateBudgets(): Promise<void> {
   await Room.collection.updateMany(
     { startingBudget: { $exists: false } },
@@ -81,15 +71,6 @@ function registerConnectionLogging(): void {
   });
 }
 
-/**
- * Connects to MongoDB in the background, retrying with exponential backoff until
- * the first connection succeeds. Resolves once the database is usable.
- *
- * This never rejects and never exits the process: an unreachable database must
- * degrade the API, not prevent the HTTP server from binding its port. Mongoose
- * handles reconnection on its own after this initial connection is established,
- * so the retry loop only covers cold start.
- */
 export async function connectDB(): Promise<void> {
   registerConnectionLogging();
 
@@ -99,8 +80,6 @@ export async function connectDB(): Promise<void> {
     try {
       await mongoose.connect(env.mongodbUri, {
         serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS,
-        // Overrides any database segment in the URI, so the target is the same
-        // whichever connection string is supplied.
         dbName: env.mongodbDbName,
       });
       await migrateParticipantUsernameKeys();

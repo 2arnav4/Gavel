@@ -2,10 +2,6 @@ import type { Request, Response, NextFunction } from "express";
 import * as roomService from "../services/roomService.js";
 import type { AuthenticatedRequest } from "../middleware/authMiddleware.js";
 
-/**
- * Handles room creation requests.
- * POST /api/rooms
- */
 export async function createRoomHandler(
   req: AuthenticatedRequest,
   res: Response,
@@ -13,7 +9,6 @@ export async function createRoomHandler(
 ): Promise<void> {
   try {
     const { roomName, startingBudget, minBidIncrement } = req.body;
-    // requireAuth guarantees this; the body is deliberately not consulted.
     const username = req.user?.username ?? "";
     const optionalNumber = (value: unknown) =>
       value === undefined || value === null || value === "" ? undefined : Number(value);
@@ -30,10 +25,6 @@ export async function createRoomHandler(
   }
 }
 
-/**
- * Handles requests for joining a room.
- * POST /api/rooms/:code/join
- */
 export async function joinRoomHandler(
   req: AuthenticatedRequest,
   res: Response,
@@ -41,7 +32,6 @@ export async function joinRoomHandler(
 ): Promise<void> {
   try {
     const code = req.params.code as string;
-    // requireAuth guarantees this; the body is deliberately not consulted.
     const username = req.user?.username ?? "";
     const result = await roomService.joinRoom(code, username);
     res.status(200).json(result);
@@ -50,10 +40,6 @@ export async function joinRoomHandler(
   }
 }
 
-/**
- * Handles room lookup requests.
- * GET /api/rooms/:code
- */
 export async function getRoomHandler(
   req: Request,
   res: Response,
@@ -68,10 +54,6 @@ export async function getRoomHandler(
   }
 }
 
-/**
- * Handles fetching results for a room.
- * GET /api/rooms/:code/results
- */
 export async function getRoomResultsHandler(
   req: Request,
   res: Response,

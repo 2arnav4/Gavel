@@ -16,9 +16,6 @@ function isDuplicateKeyError(error: unknown): boolean {
   );
 }
 
-/**
- * Creates an auction room and sets the creator as the admin participant.
- */
 export async function createRoom(
   username: string,
   roomName: string,
@@ -43,10 +40,8 @@ export async function createRoom(
     );
   }
 
-  // 1. Generate unique room code
   const code = await generateUniqueRoomCode();
 
-  // 2. Create the room
   const room = new Room({
     code,
     name,
@@ -56,8 +51,6 @@ export async function createRoom(
   });
   await room.save();
 
-  // 3. Create the admin participant. The host is given a purse too so the
-  // record is uniform, but it is never spent — hosts cannot bid.
   const sessionToken = crypto.randomUUID();
   const participant = new Participant({
     roomId: room._id,
@@ -70,7 +63,6 @@ export async function createRoom(
   });
   await participant.save();
 
-  // 4. Link admin participant id to the room
   room.adminParticipantId = participant._id;
   await room.save();
 
@@ -81,14 +73,10 @@ export async function createRoom(
   };
 }
 
-/**
- * Adds a participant to an existing auction room if name is not taken.
- */
 export async function joinRoom(code: string, username: string) {
   const bidderName = requireString(username, "Username", 40);
   const normalizedCode = requireString(code, "Room code").toUpperCase();
 
-  // 1. Find room
   const room = await Room.findOne({ code: normalizedCode });
   if (!room) {
     throw new AppError("Room not found", 404);
@@ -100,7 +88,6 @@ export async function joinRoom(code: string, username: string) {
 
   const normalizedUsername = bidderName.toLowerCase();
 
-  // 2. Verify that username is not already taken in this room.
   const existingParticipant = await Participant.findOne({
     roomId: room._id,
     usernameNormalized: normalizedUsername,
@@ -109,7 +96,6 @@ export async function joinRoom(code: string, username: string) {
     throw new AppError(`Username "${username}" is already taken in this room`, 400);
   }
 
-  // 3. Create participant
   const sessionToken = crypto.randomUUID();
   const participant = new Participant({
     roomId: room._id,
@@ -117,15 +103,10 @@ export async function joinRoom(code: string, username: string) {
     usernameNormalized: normalizedUsername,
     role: "participant",
     sessionToken,
-    // Copied, not referenced: a bidder's purse is fixed at the moment they join.
     budget: room.startingBudget,
     spent: 0,
   });
 
-  // The check above is a read-then-write race: two joins claiming the same name
-  // can both pass it. The compound unique index is the real guard, so translate
-  // its duplicate-key error into the message the pre-check would have produced
-  // rather than letting a generic conflict reach the client.
   try {
     await participant.save();
   } catch (error) {
@@ -142,9 +123,6 @@ export async function joinRoom(code: string, username: string) {
   };
 }
 
-/**
- * Retrieves public room details by room code.
- */
 export async function getRoomByCode(code: string) {
   const normalizedCode = requireString(code, "Room code").toUpperCase();
   const room = await Room.findOne({ code: normalizedCode });
@@ -155,9 +133,6 @@ export async function getRoomByCode(code: string) {
   return room;
 }
 
-/**
- * Retrieves resolved auction items (sold/unsold) for results presentation.
- */
 export async function getRoomResults(code: string) {
   const normalizedCode = requireString(code, "Room code").toUpperCase();
   const room = await Room.findOne({ code: normalizedCode });
@@ -165,7 +140,6 @@ export async function getRoomResults(code: string) {
     throw new AppError("Room not found", 404);
   }
 
-  // Retrieve items that are resolved (sold or unsold)
   const items = await AuctionItem.find({
     roomId: room._id,
     status: { $in: ["sold", "unsold"] },

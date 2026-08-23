@@ -25,20 +25,11 @@ interface ToastMsg {
   type: "info" | "success" | "error";
 }
 
-/**
- * The smallest legal bid right now.
- *
- * Mirrors getMinimumBid on the server: the opening bid is the asking price
- * exactly, and every raise after that must clear the room's increment. Kept
- * identical so the UI never offers an amount the server would reject.
- */
 function getMinimumBid(startingBid: number, currentBid: number, increment: number): number {
   return currentBid > 0 ? currentBid + increment : startingBid;
 }
 
 export function AuctionPage() {
-  // Room codes are stored uppercase, so a lowercase URL must not read as a
-  // different room and lock out a session that is actually valid.
   const { code: rawCode } = useParams<{ code: string }>();
   const code = rawCode?.toUpperCase();
   const navigate = useNavigate();
@@ -51,7 +42,6 @@ export function AuctionPage() {
     clearRoomSession,
   } = useSessionStore();
 
-  // Connect to Socket.IO to track live bidding item, presence, and bids history
   const {
     status: socketStatus,
     room,
@@ -66,7 +56,7 @@ export function AuctionPage() {
 
   const [bidVal, setBidVal] = useState("");
   const [localBidErr, setLocalBidErr] = useState<string | null>(null);
-  
+
   const [toasts, setToasts] = useState<ToastMsg[]>([]);
   const [activityLogs, setActivityLogs] = useState<string[]>([]);
   const [clockNow, setClockNow] = useState(() => Date.now());
@@ -80,17 +70,11 @@ export function AuctionPage() {
   }, []);
 
   const minBidIncrement = room?.minBidIncrement ?? 1;
-  // The opening bid may match the asking price exactly; every later bid must
-  // clear the room's minimum raise.
   const minBidVal = activeItem
     ? getMinimumBid(activeItem.startingBid ?? 0, activeItem.currentBid ?? 0, minBidIncrement)
     : 1;
-  // currentBid is zero until someone actually bids, so it is only a real price
-  // once it is positive.
   const highestBid = activeItem && activeItem.currentBid > 0 ? activeItem.currentBid : null;
 
-  // While paused there is no deadline to count down to, so the frozen remainder
-  // is rendered instead of a live difference.
   const isPaused = Boolean(room?.isPaused);
   const endsAtMs = room?.endsAt ? Date.parse(room.endsAt) : Number.NaN;
   const secondsRemaining = isPaused
@@ -102,14 +86,8 @@ export function AuctionPage() {
 
   const me = participants.find((participant) => participant._id === sessionParticipantId);
   const remainingBudget = me ? me.budget - me.spent : null;
-  // A bidder whose purse cannot even cover the minimum is out of the running for
-  // this item, which is worth saying plainly rather than letting them bid and be
-  // rejected by the server.
   const canAffordMinimum = remainingBudget === null || remainingBudget >= minBidVal;
 
-  // Preset raises stepped by the room's own increment, so every chip is a legal
-  // bid by construction. Anything beyond the purse is dropped rather than shown
-  // disabled: an unaffordable option is noise under a countdown.
   const quickBids = [
     { label: "Minimum", amount: minBidVal },
     { label: `+₹${minBidIncrement.toLocaleString()}`, amount: minBidVal + minBidIncrement },
@@ -127,7 +105,6 @@ export function AuctionPage() {
     return () => window.clearInterval(interval);
   }, [endsAtMs]);
 
-  // Listen to live events for broadcast logs and toast notifications
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
@@ -176,15 +153,10 @@ export function AuctionPage() {
       socket.off("bid:rejected", handleBidRejected);
       socket.off("error", handleServerError);
     };
-    // socketStatus is a dependency because getSocket() returns null until the
-    // connection has been created; without it these listeners would never attach
-    // on a first render that beat the socket into existence.
   }, [addToast, socketStatus]);
 
-  // Security check: Redirect if the user has no session or is in the wrong room
   const hasNoAccess = !sessionUsername || !sessionRole || sessionRoomCode !== code;
 
-  // Automatically navigate to results page when room transitions to completed status
   useEffect(() => {
     if (room?.status === "completed" && code) {
       navigate(`/results/${code}`);
@@ -192,15 +164,11 @@ export function AuctionPage() {
   }, [room?.status, code, navigate]);
 
   const handleLeaveRoom = () => {
-    // Leaving a room ends the room membership only. Clearing the whole session
-    // would also sign the user out while their auth cookie stayed set, so the
-    // next reload would silently sign them back in.
     disconnectSocket();
     clearRoomSession();
     navigate("/");
   };
 
-  // Submit new bid (Participants only)
   const handleSubmitBid = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeItem) return;
@@ -229,10 +197,9 @@ export function AuctionPage() {
     if (socket) {
       socket.emit("bid:place", { amount: bidAmount });
     }
-    setBidVal(""); // Reset input field
+    setBidVal("");
   };
 
-  // Sell active item (Admin only)
   const handleSellItem = () => {
     const socket = getSocket();
     if (socket) {
@@ -240,7 +207,6 @@ export function AuctionPage() {
     }
   };
 
-  // Mark active item unsold (Admin only)
   const handleMarkUnsold = () => {
     const socket = getSocket();
     if (socket) {
@@ -248,7 +214,6 @@ export function AuctionPage() {
     }
   };
 
-  // Freeze or restore the countdown (Admin only)
   const handleTogglePause = () => {
     const socket = getSocket();
     if (socket) {
@@ -256,9 +221,6 @@ export function AuctionPage() {
     }
   };
 
-  // Checked before the connection states: without a session token the socket can
-  // never connect, so reporting a connection failure would send the user to a
-  // dead end instead of to the join screen that actually fixes it.
   if (hasNoAccess) {
     return (
       <PageContainer className="px-4 py-12 sm:px-6 sm:py-16">
@@ -320,15 +282,13 @@ export function AuctionPage() {
   }
 
   const isAdmin = sessionRole === "admin";
-  // The host runs the auction rather than bidding in it, so listing them here
-  // would misrepresent who you are actually competing against.
   const bidders = participants.filter((participant) => participant.role !== "admin");
 
   return (
     <PageContainer className="px-4 py-12 sm:px-6 sm:py-16 max-w-5xl">
       <div className="space-y-8">
-        
-        {/* Connection status header */}
+
+        {}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-border pb-6">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -373,7 +333,7 @@ export function AuctionPage() {
           </Button>
         </div>
 
-        {/* Host Control center resolving controls (Visible to Admin only) */}
+        {}
         {isAdmin && activeItem && (
           <div className="border border-amber-500/20 bg-amber-500/5 p-4 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm">
             <div className="space-y-1 text-center sm:text-left">
@@ -423,16 +383,16 @@ export function AuctionPage() {
           </div>
         )}
 
-        {/* Live Auction Board Layout */}
+        {}
         <div className="grid gap-6 md:grid-cols-3 items-start">
-          
-          {/* Active Item Container (2/3 width) */}
+
+          {}
           <div className="md:col-span-2 space-y-6">
-            
-            {/* Current Item Presentation */}
+
+            {}
             <div className="border border-border bg-surface-raised/40 p-6 rounded-xl space-y-6 shadow-lg relative overflow-hidden">
               <div className="absolute top-0 right-0 h-32 w-32 rounded-full bg-accent/5 blur-[30px] pointer-events-none" />
-              
+
               <div className="flex items-center justify-between border-b border-border/40 pb-4">
                 <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2">
                   <Tag className="h-4 w-4 text-accent" />
@@ -473,7 +433,7 @@ export function AuctionPage() {
                     )}
                   </div>
 
-                  {/* Pricing Box */}
+                  {}
                   <div className="grid grid-cols-2 gap-4 bg-surface-overlay/60 border border-border/50 p-5 rounded-lg">
                     <div>
                       <span className="text-[10px] font-semibold text-text-muted uppercase tracking-wider block">
@@ -507,7 +467,7 @@ export function AuctionPage() {
               )}
             </div>
 
-            {/* Bidding Placement input Box (Visible to Bidders only) */}
+            {}
             {!isAdmin && activeItem && isPaused && (
               <div className="border border-amber-500/20 bg-amber-500/5 p-6 rounded-xl flex items-center gap-3 shadow-lg">
                 <Pause className="h-5 w-5 text-amber-400 shrink-0" />
@@ -527,9 +487,7 @@ export function AuctionPage() {
                   Place Bid
                 </span>
 
-                {/* noValidate: the browser's own tooltip for `min` is an
-                    unstyled native popup that appears on submit and cannot be
-                    themed. All validation is ours, rendered inline. */}
+                {}
                 <form onSubmit={handleSubmitBid} className="space-y-4" noValidate>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="rounded-lg border border-border/50 bg-surface-overlay/40 px-3 py-2">
@@ -614,8 +572,6 @@ export function AuctionPage() {
                         placeholder={`Or type an amount (min ₹${minBidVal.toLocaleString()})`}
                         value={bidVal}
                         onChange={(e) => {
-                          // Digits only. A minus sign can never reach state, so
-                          // a negative bid is unreachable rather than rejected.
                           setBidVal(e.target.value.replace(/[^0-9]/g, ""));
                           setLocalBidErr(null);
                         }}
@@ -631,10 +587,10 @@ export function AuctionPage() {
             )}
           </div>
 
-          {/* Sidebar Section (1/3 width) */}
+          {}
           <div className="space-y-6">
-            
-            {/* Bid History list timeline */}
+
+            {}
             <div className="border border-border bg-surface-raised/40 p-6 rounded-xl space-y-4 shadow-lg min-h-[220px] flex flex-col">
               <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
                 <TrendingUp className="h-4 w-4 text-accent" />
@@ -696,7 +652,7 @@ export function AuctionPage() {
               )}
             </div>
 
-            {/* Bidders Connection Sidebar */}
+            {}
             <div className="border border-border bg-surface-raised/40 p-6 rounded-xl space-y-4 shadow-lg flex flex-col">
               <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
                 <Users className="h-4 w-4 text-accent" />
@@ -741,7 +697,7 @@ export function AuctionPage() {
               </div>
             </div>
 
-            {/* Notification logs panel */}
+            {}
             <div className="border border-border bg-surface-raised/40 p-6 rounded-xl space-y-4 shadow-lg">
               <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
                 <MessageSquare className="h-4 w-4 text-accent" />
@@ -758,8 +714,6 @@ export function AuctionPage() {
                     </p>
                   </div>
                 ) : (
-                  // Newest first: during a live auction the latest event is the
-                  // one that matters, and scrolling to find it wastes the clock.
                   [...activityLogs].reverse().map((log, index) => {
                     const isSuccess = log.includes("✔");
                     return (
@@ -783,7 +737,7 @@ export function AuctionPage() {
         </div>
       </div>
 
-      {/* Floating Toast Notification Container */}
+      {}
       <div className="fixed top-6 right-6 z-50 flex flex-col gap-3 max-w-sm w-full pointer-events-none">
         {toasts.map((toast) => (
           <div

@@ -5,8 +5,6 @@ export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
 
-    // env.clientUrls is already trimmed and stripped of trailing slashes, so
-    // only the incoming origin needs normalizing before the comparison.
     const allowedOrigins = env.isDevelopment
       ? [...env.clientUrls, "http://localhost:5173"]
       : env.clientUrls;

@@ -9,7 +9,6 @@ interface Props {
 
 type InitStatus = "loading" | "ready" | "unavailable";
 
-// How long to wait before telling the user a slow start is expected rather than broken.
 const SLOW_START_NOTICE_MS = 4_000;
 
 export function AuthInitializer({ children }: Props) {
@@ -18,9 +17,6 @@ export function AuthInitializer({ children }: Props) {
   const [status, setStatus] = useState<InitStatus>("loading");
   const [isSlow, setIsSlow] = useState(false);
 
-  // Bumping this re-runs the check. Retrying by changing an input rather than by
-  // calling the effect's body keeps every state write inside either a promise
-  // callback or an event handler, so no render is committed and then discarded.
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -29,11 +25,6 @@ export function AuthInitializer({ children }: Props) {
     checkAuth()
       .then((data) => {
         if (cancelled) return;
-        // The server is the authority on whether the session is still valid. If
-        // it says nobody is signed in, a token left in storage is stale and
-        // would otherwise keep the UI claiming an identity the API rejects —
-        // exactly the mismatch that produced "You must be signed in to do that"
-        // on a screen showing a signed-in user.
         if (!data.user) setAuthToken(null);
         setAuthUser(data.user ?? null);
         setStatus("ready");
@@ -41,8 +32,6 @@ export function AuthInitializer({ children }: Props) {
       .catch((error: unknown) => {
         if (cancelled) return;
 
-        // An unreachable backend is not the same as a signed-out user: rendering
-        // the app would leave every request failing with no explanation.
         if (error instanceof ApiUnavailableError) {
           setStatus("unavailable");
           return;
