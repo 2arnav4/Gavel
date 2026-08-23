@@ -42,3 +42,5 @@ dist-ssr/
 
 # Local agent context, not part of the project
 CLAUDE.md
+
+HANDOVER-*.md
