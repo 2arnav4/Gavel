@@ -6,6 +6,9 @@ import { Room } from "../../models/roomModel.js";
 import { getMinimumBid, isValidPositiveAmount } from "../../utils/auction.js";
 import { env } from "../../config/env.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
+import { createRateLimiter } from "../../utils/rateLimiter.js";
+
+const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
 
 /**
  * Registers Bidding-related event listeners for a given Socket instance.
@@ -21,6 +24,16 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         socket.emit("bid:rejected", {
           reason: "Not authenticated for any room.",
           minimumBid: 1,
+        });
+        return;
+      }
+
+      const bidLimit = bidRateLimiter.check(participant._id.toString());
+      if (!bidLimit.allowed) {
+        socket.emit("bid:rejected", {
+          reason: "You are bidding too quickly. Slow down for a moment.",
+          minimumBid: 1,
+          retryAfterMs: bidLimit.retryAfterMs,
         });
         return;
       }
