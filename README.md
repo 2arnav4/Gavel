@@ -8,7 +8,7 @@ A server-authoritative live auction platform. A host creates a private room, pre
 
 ## Live Demo
 
-- **App:** _redeploying — link to follow_
+- **App:** https://gavel-pied.vercel.app
 - **API:** https://live-auction-fhb9.onrender.com
 
 > The backend runs on Render's free tier and sleeps after roughly 15 minutes of inactivity. The first request after an idle period wakes it and can take up to a minute; the app shows an explanatory notice while it waits. Load the app once before demoing to warm it.
