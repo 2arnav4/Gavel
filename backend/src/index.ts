@@ -10,6 +10,9 @@ import { Participant } from "./models/participantModel.js";
 const app = createApp();
 const httpServer = createServer(app);
 
+const SHUTDOWN_TIMEOUT_MS = 10_000;
+let shuttingDown = false;
+
 const io = createSocketServer(httpServer);
 app.set("io", io);
 
@@ -24,7 +27,9 @@ void connectDB().then(async () => {
       { $set: { isConnected: false } },
     );
     if (modifiedCount > 0) {
-      console.log(`Cleared ${modifiedCount} stale presence flag(s) from the previous run.`);
+      console.log(
+        `Cleared ${modifiedCount} stale presence flag(s) from the previous run.`,
+      );
     }
   } catch (error) {
     console.error("Unable to clear stale presence flags:", error);
@@ -38,12 +43,26 @@ void connectDB().then(async () => {
 });
 
 async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+
   console.log(`${signal} received. Shutting down.`);
 
-  io.close();
-  httpServer.close();
-  await mongoose.disconnect().catch(() => undefined);
+  const forceExit = setTimeout(() => {
+    console.error("Shutdown timed out. Forcing exit.");
+    process.exit(1);
+  }, SHUTDOWN_TIMEOUT_MS);
+  forceExit.unref();
 
+  try {
+    await new Promise<void>((resolve) => io.close(() => resolve()));
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await mongoose.disconnect();
+  } catch (error) {
+    console.error("Error during shutdown:", error);
+  }
+
+  clearTimeout(forceExit);
   process.exit(0);
 }
 

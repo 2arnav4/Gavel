@@ -41,9 +41,19 @@ export const env = {
   clientUrls: getOriginList("CLIENT_URL", "http://localhost:5173"),
   mongodbUri: getEnv("MONGODB_URI", "mongodb://localhost:27017/auction-room"),
   mongodbDbName: getEnv("MONGODB_DB_NAME", "auction"),
-  auctionItemDurationSeconds: getPositiveInteger("AUCTION_ITEM_DURATION_SECONDS", "60"),
-  defaultStartingBudget: getPositiveInteger("DEFAULT_STARTING_BUDGET", "100000"),
-  defaultMinBidIncrement: getPositiveInteger("DEFAULT_MIN_BID_INCREMENT", "500"),
+  auctionItemDurationSeconds: getPositiveInteger(
+    "AUCTION_ITEM_DURATION_SECONDS",
+    "60",
+  ),
+  defaultStartingBudget: getPositiveInteger(
+    "DEFAULT_STARTING_BUDGET",
+    "100000",
+  ),
+  defaultMinBidIncrement: getPositiveInteger(
+    "DEFAULT_MIN_BID_INCREMENT",
+    "500",
+  ),
+  allowPreviewOrigins: getEnv("ALLOW_PREVIEW_ORIGINS", "false") === "true",
   jwtSecret:
     process.env.JWT_SECRET ??
     (nodeEnv === "production"

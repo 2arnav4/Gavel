@@ -6,11 +6,12 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import { requireDatabase } from "./middleware/requireDatabase.js";
 import { apiRouter } from "./routes/index.js";
 import { healthRouter } from "./routes/healthRoutes.js";
+import helmet from "helmet";
 
 export function createApp() {
   const app = express();
   app.set("trust proxy", 1);
-
+  app.use(helmet());
   app.use(cors(corsOptions));
   app.use(express.json());
   app.use(cookieParser());
