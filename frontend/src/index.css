@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #09090b;
+  --color-surface-raised: #111113;
+  --color-surface-overlay: #1a1a1f;
+  --color-border: #27272a;
+  --color-border-subtle: #1f1f23;
+  --color-text-primary: #fafafa;
+  --color-text-secondary: #a1a1aa;
+  --color-text-muted: #71717a;
+  --color-accent: #6366f1;
+  --color-accent-hover: #818cf8;
+  --color-accent-muted: #4f46e5;
+}
+
+/* Tells the browser to render its own controls — scrollbars, spinners, focus
+   rings — in dark form. Without this they default to light and punch white
+   rectangles through a dark UI. */
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-surface text-text-primary antialiased;
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* Number inputs ship with a stepper that only appears on hover or focus, so it
+   shifts the layout and invites click-to-increment on a field where the value
+   is typed. Removed in favour of the keyboard. */
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* Scrollbars inside panels: thin, dark, and only as visible as they need to be. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-muted);
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.6s ease-out forwards;
+}
+
+.animate-fade-in-up-delay-1 {
+  animation: fade-in-up 0.6s ease-out 0.1s forwards;
+  opacity: 0;
+}
+
+.animate-fade-in-up-delay-2 {
+  animation: fade-in-up 0.6s ease-out 0.2s forwards;
+  opacity: 0;
+}
+
+.animate-fade-in-up-delay-3 {
+  animation: fade-in-up 0.6s ease-out 0.3s forwards;
+  opacity: 0;
+}

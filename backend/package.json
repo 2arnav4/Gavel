@@ -1,0 +1,33 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "build": "rm -rf dist && tsc",
+    "start": "node server.js",
+    "dev": "tsx watch src/index.ts",
+    "lint": "tsc --noEmit",
+    "seed": "npm run build && node dist/utils/seed.js",
+    "test": "npm run build && node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js"
+  },
+  "dependencies": {
+    "@types/cookie-parser": "^1.4.10",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.7.4",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/node": "^24.13.2",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  }
+}
