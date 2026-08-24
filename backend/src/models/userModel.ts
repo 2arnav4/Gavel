@@ -35,7 +35,7 @@ const UserSchema = new Schema<IUser>(
     hashIterations: {
       type: Number,
       required: true,
-      default: 1_000,
+      min: 1,
     },
   },
   {

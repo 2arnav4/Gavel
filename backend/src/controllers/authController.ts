@@ -3,9 +3,17 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { AppError } from "../middleware/errorHandler.js";
 import { env } from "../config/env.js";
-import { User, type IUser } from "../models/userModel.js";
+import { User } from "../models/userModel.js";
 import { readAuthToken } from "../middleware/authMiddleware.js";
 import { requireString } from "../utils/validation.js";
+import {
+  PBKDF2_ITERATIONS,
+  createPasswordRecord,
+  needsRehash,
+  validatePassword,
+  verifyPassword,
+} from "../utils/password.js";
+import { logger } from "../utils/logger.js";
 
 const isProd = env.nodeEnv === "production";
 
@@ -15,55 +23,6 @@ const COOKIE_OPTIONS = {
   sameSite: (isProd ? "none" : "lax") as "none" | "lax" | "strict" | undefined,
   maxAge: 24 * 60 * 60 * 1000,
 };
-
-const PBKDF2_ITERATIONS = 210_000;
-const PBKDF2_KEY_LENGTH = 64;
-const PBKDF2_DIGEST = "sha512";
-
-function generateSalt(): string {
-  return crypto.randomBytes(16).toString("hex");
-}
-
-function hashPassword(
-  password: string,
-  salt: string,
-  iterations: number,
-): string {
-  return crypto
-    .pbkdf2Sync(password, salt, iterations, PBKDF2_KEY_LENGTH, PBKDF2_DIGEST)
-    .toString("hex");
-}
-
-function verifyPassword(password: string, user: IUser): boolean {
-  const candidate = Buffer.from(
-    hashPassword(password, user.salt, user.hashIterations ?? 1_000),
-    "hex",
-  );
-  const stored = Buffer.from(user.passwordHash, "hex");
-
-  if (candidate.length !== stored.length) return false;
-
-  return crypto.timingSafeEqual(candidate, stored);
-}
-
-function validatePassword(password: string): string | null {
-  if (password.length < 8) {
-    return "Password must be at least 8 characters long.";
-  }
-  if (!/[A-Z]/.test(password)) {
-    return "Password must contain at least one uppercase letter.";
-  }
-  if (!/[a-z]/.test(password)) {
-    return "Password must contain at least one lowercase letter.";
-  }
-  if (!/[0-9]/.test(password)) {
-    return "Password must contain at least one digit.";
-  }
-  if (!/[!@#$%^&*(),.?":{}|<>]/.test(password)) {
-    return "Password must contain at least one special character (e.g., !, @, #, $, etc.).";
-  }
-  return null;
-}
 
 export async function loginHandler(
   req: Request,
@@ -92,6 +51,16 @@ export async function loginHandler(
       if (!user || !verifyPassword(suppliedPassword, user)) {
         throw new AppError("Invalid username or password.", 401);
       }
+
+      if (needsRehash(user)) {
+        const upgraded = createPasswordRecord(suppliedPassword);
+        await User.updateOne({ _id: user._id }, { $set: upgraded });
+        logger.info("Upgraded password hash iterations on login", {
+          userId: user._id.toString(),
+          iterations: PBKDF2_ITERATIONS,
+        });
+      }
+
       finalUsername = user.username;
     }
 
@@ -145,15 +114,10 @@ export async function registerHandler(
       );
     }
 
-    const salt = generateSalt();
-    const passwordHash = hashPassword(suppliedPassword, salt, PBKDF2_ITERATIONS);
-
     const user = new User({
       username: trimmedUsername,
       usernameNormalized: normalizedUsername,
-      passwordHash,
-      salt,
-      hashIterations: PBKDF2_ITERATIONS,
+      ...createPasswordRecord(suppliedPassword),
     });
     await user.save();
 

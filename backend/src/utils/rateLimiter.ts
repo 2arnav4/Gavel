@@ -13,6 +13,7 @@ export interface RateLimiterOptions {
 export interface RateLimiter {
   check(key: string): RateLimitDecision;
   reset(key: string): void;
+  clear(): void;
   size(): number;
 }
 
@@ -60,6 +61,10 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
 
     reset(key: string): void {
       windows.delete(key);
+    },
+
+    clear(): void {
+      windows.clear();
     },
 
     size(): number {

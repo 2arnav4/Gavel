@@ -74,3 +74,17 @@ test("reset clears a single key", () => {
   limiter.reset("a");
   assert.equal(limiter.check("a").allowed, true);
 });
+
+test("clear empties every window at once", () => {
+  const limiter = createRateLimiter({ limit: 1, windowMs: 1000, now: () => 0 });
+
+  limiter.check("a");
+  limiter.check("b");
+  assert.equal(limiter.size(), 2);
+
+  limiter.clear();
+
+  assert.equal(limiter.size(), 0);
+  assert.equal(limiter.check("a").allowed, true);
+  assert.equal(limiter.check("b").allowed, true);
+});
