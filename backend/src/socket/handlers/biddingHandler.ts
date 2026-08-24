@@ -7,6 +7,7 @@ import { getMinimumBid, isValidPositiveAmount } from "../../utils/auction.js";
 import { env } from "../../config/env.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
 import { createRateLimiter } from "../../utils/rateLimiter.js";
+import { readEventField } from "../validation.js";
 
 const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
 
@@ -17,7 +18,7 @@ type BidRejection = {
 };
 
 export function registerBiddingHandlers(io: Server, socket: Socket): void {
-  socket.on("bid:place", async (data: { amount?: unknown }) => {
+  socket.on("bid:place", async (data: unknown) => {
     try {
       const participant = socket.data.participant;
       const cachedRoom = socket.data.room;
@@ -79,7 +80,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      const amount = data.amount;
+      const amount = readEventField(data, "amount");
       if (!isValidPositiveAmount(amount)) {
         socket.emit("bid:rejected", {
           reason: "Bid amount must be a valid number.",

@@ -1,7 +1,9 @@
 import type { Socket } from "socket.io";
 import { isDatabaseConnected } from "../../config/db.js";
+import { AppError } from "../../middleware/errorHandler.js";
 import { Participant } from "../../models/participantModel.js";
 import { Room } from "../../models/roomModel.js";
+import { readHandshakeAuth, toSocketMessage } from "../validation.js";
 
 export async function socketAuthMiddleware(
   socket: Socket,
@@ -14,12 +16,7 @@ export async function socketAuthMiddleware(
       );
     }
 
-    const sessionToken = socket.handshake.auth.sessionToken;
-    const roomCode = socket.handshake.auth.roomCode;
-
-    if (!sessionToken || !roomCode) {
-      return next(new Error("Authentication failed: Missing credentials."));
-    }
+    const { sessionToken, roomCode } = readHandshakeAuth(socket.handshake.auth);
 
     const participant = await Participant.findOne({ sessionToken });
     if (!participant) {
@@ -27,7 +24,7 @@ export async function socketAuthMiddleware(
     }
 
     const room = await Room.findById(participant.roomId);
-    if (!room || room.code !== roomCode.toUpperCase()) {
+    if (!room || room.code !== roomCode) {
       return next(new Error("Authentication failed: Room mismatch."));
     }
 
@@ -36,7 +33,9 @@ export async function socketAuthMiddleware(
 
     next();
   } catch (error) {
-    console.error("Socket authentication middleware error:", error);
-    next(new Error("Authentication failed: Internal server error."));
+    if (!(error instanceof AppError)) {
+      console.error("Socket authentication middleware error:", error);
+    }
+    next(new Error(`Authentication failed: ${toSocketMessage(error)}`));
   }
 }
