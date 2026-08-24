@@ -10,7 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
     "seed": "npm run build && node dist/utils/seed.js",
-    "test": "npm run build && PRESENCE_GRACE_MS=400 node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js dist/socket/socketFailureTest.js dist/socket/presenceTest.js"
+    "test": "npm run build && PRESENCE_GRACE_MS=400 node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js dist/socket/socketFailureTest.js dist/socket/presenceTest.js dist/socket/errorsTest.js"
   },
   "dependencies": {
     "@types/cookie-parser": "^1.4.10",

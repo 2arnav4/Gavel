@@ -5,6 +5,7 @@ import { AuctionItem, type IAuctionItem } from "../../models/itemModel.js";
 import { Participant } from "../../models/participantModel.js";
 import { getAuctionEndsAt, getExpiryResolution } from "../../utils/auction.js";
 import { logger } from "../../utils/logger.js";
+import type { SocketError } from "../errors.js";
 
 type Resolution = "sold" | "unsold";
 
@@ -167,11 +168,11 @@ export function registerResolutionHandlers(io: Server, socket: Socket): void {
       const cachedRoom = socket.data.room;
 
       if (!participant || !cachedRoom) {
-        socket.emit("error", { message: "Not authenticated for any room." });
+        socket.emit("error", { code: "NOT_AUTHENTICATED", message: "Not authenticated for any room." } satisfies SocketError);
         return;
       }
       if (participant.role !== "admin") {
-        socket.emit("error", { message: "Access denied: Only room hosts can resolve items." });
+        socket.emit("error", { code: "NOT_AUTHORIZED", message: "Access denied: Only room hosts can resolve items." } satisfies SocketError);
         return;
       }
 
@@ -180,11 +181,11 @@ export function registerResolutionHandlers(io: Server, socket: Socket): void {
         const message = resolution === "sold"
           ? "An item can only be sold after at least one accepted bid."
           : "Item is not currently active or has already been resolved.";
-        socket.emit("error", { message });
+        socket.emit("error", { code: "NOTHING_TO_RESOLVE", message } satisfies SocketError);
       }
     } catch (error) {
       logger.error("Error resolving auction item", { error, resolution });
-      socket.emit("error", { message: "Internal server error resolving item." });
+      socket.emit("error", { code: "INTERNAL_ERROR", message: "Internal server error resolving item." } satisfies SocketError);
     }
   };
 

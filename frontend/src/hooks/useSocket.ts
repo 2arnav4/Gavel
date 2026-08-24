@@ -21,7 +21,7 @@ export function useSocket(roomCode: string) {
   const [activeItem, setActiveItem] = useState<AuctionItem | null>(null);
   const [serverClockOffset, setServerClockOffset] = useState(0);
   const [bids, setBids] = useState<Bid[]>([]);
-  const [bidError, setBidError] = useState<{ reason: string; minimumBid?: number } | null>(null);
+  const [bidError, setBidError] = useState<{ code?: string; reason: string; minimumBid?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -99,7 +99,7 @@ export function useSocket(roomCode: string) {
         setRoom((current) => current ? { ...current, endsAt: data.item.endsAt } : current);
       }
     };
-    const handleBidRejected = (data: { reason: string; minimumBid?: number }) => setBidError(data);
+    const handleBidRejected = (data: { code?: string; reason: string; minimumBid?: number }) => setBidError(data);
     const handleAuctionPaused = (data: { itemId: string; remainingMs: number }) => {
       setActiveItem((current) => current ? { ...current, isPaused: true, endsAt: null } : current);
       setRoom((current) => current

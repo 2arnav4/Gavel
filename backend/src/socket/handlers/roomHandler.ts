@@ -6,6 +6,7 @@ import { Room } from "../../models/roomModel.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
 import { createPresenceTracker } from "../presence.js";
+import type { SocketError } from "../errors.js";
 
 const PRESENCE_GRACE_MS = env.presenceGraceMs;
 
@@ -19,13 +20,13 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       const cachedRoom = socket.data.room;
 
       if (!participant || !cachedRoom) {
-        socket.emit("error", { message: "Not authenticated for any room." });
+        socket.emit("error", { code: "NOT_AUTHENTICATED", message: "Not authenticated for any room." } satisfies SocketError);
         return;
       }
 
       const room = await Room.findById(cachedRoom._id);
       if (!room) {
-        socket.emit("error", { message: "Room not found." });
+        socket.emit("error", { code: "ROOM_NOT_FOUND", message: "Room not found." } satisfies SocketError);
         return;
       }
 
@@ -96,7 +97,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       logger.info("Participant connected", { roomCode, participantId: participant._id.toString() });
     } catch (error) {
       logger.error("Error in room:connect handler", { error });
-      socket.emit("error", { message: "Internal server error during room connect." });
+      socket.emit("error", { code: "INTERNAL_ERROR", message: "Internal server error during room connect." } satisfies SocketError);
     }
   });
 

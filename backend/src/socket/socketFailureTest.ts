@@ -11,8 +11,8 @@ import { Room } from "../models/roomModel.js";
 import { clearAuctionTimer } from "./handlers/resolutionHandler.js";
 import { connect, expectRejectedHandshake, nextEvent, startHarness, type Harness } from "./testHarness.js";
 
-type BidRejection = { reason: string; minimumBid?: number; retryAfterMs?: number };
-type SocketError = { message: string };
+type BidRejection = { code: string; reason: string; minimumBid?: number; retryAfterMs?: number };
+type SocketError = { code: string; message: string };
 
 const STARTING_BID = 1_000;
 const MIN_INCREMENT = 500;
@@ -174,6 +174,7 @@ test("a host bidding is rejected and is not told a minimum bid", async (t) => {
   socket.emit("bid:place", { amount: STARTING_BID });
 
   const rejection = await pending;
+  assert.equal(rejection.code, "NOT_AUTHORIZED");
   assert.match(rejection.reason, /hosts are not allowed to place bids/);
   assert.equal(rejection.minimumBid, undefined);
   socket.close();
@@ -190,7 +191,7 @@ test("a malformed bid payload reports the real minimum, not currentBid + 1", asy
     socket.emit("bid:place", payload);
 
     const rejection = await pending;
-    assert.match(rejection.reason, /must be a valid number/);
+    assert.equal(rejection.code, "INVALID_INPUT");
     assert.equal(rejection.minimumBid, STARTING_BID);
   }
 
@@ -200,11 +201,13 @@ test("a malformed bid payload reports the real minimum, not currentBid + 1", asy
 test("a bid below the minimum is rejected with the increment-aware minimum", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
 
-  const socket = track(await connect(harness.url, { sessionToken: poorToken, roomCode }));
+  const lowToken = await createBidder("t_low");
+  const socket = track(await connect(harness.url, { sessionToken: lowToken, roomCode }));
   const pending = nextEvent<BidRejection>(socket, "bid:rejected");
   socket.emit("bid:place", { amount: STARTING_BID - 1 });
 
   const rejection = await pending;
+  assert.equal(rejection.code, "BID_TOO_LOW");
   assert.equal(rejection.minimumBid, STARTING_BID);
   socket.close();
 });
@@ -217,7 +220,7 @@ test("a bid beyond the remaining purse is rejected", async (t) => {
   socket.emit("bid:place", { amount: STARTING_BID });
 
   const rejection = await pending;
-  assert.match(rejection.reason, /exceeds your remaining purse/);
+  assert.equal(rejection.code, "INSUFFICIENT_BUDGET");
   assert.equal(rejection.minimumBid, STARTING_BID);
   socket.close();
 });
@@ -237,7 +240,7 @@ test("the sixth bid inside one second is throttled and carries a retry delay", a
   }
 
   const throttled = rejections[5];
-  assert.match(throttled.reason, /bidding too quickly/);
+  assert.equal(throttled.code, "RATE_LIMITED");
   assert.ok(throttled.retryAfterMs !== undefined && throttled.retryAfterMs > 0);
   assert.equal(throttled.minimumBid, undefined);
   socket.close();
@@ -251,7 +254,7 @@ test("a participant cannot resolve an item", async (t) => {
   for (const event of ["item:sell", "item:unsold"]) {
     const pending = nextEvent<SocketError>(socket, "error");
     socket.emit(event);
-    assert.match((await pending).message, /Only room hosts can resolve items/);
+    assert.equal((await pending).code, "NOT_AUTHORIZED");
   }
 
   socket.close();
@@ -391,4 +394,120 @@ test("a second tab closing leaves the participant online immediately", async (t)
 
   tabOne.close();
   observer.close();
+});
+
+
+test("two simultaneous auction:start events produce exactly one started auction", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const raceCode = `T${(Date.now() + 7).toString(36).slice(-5).toUpperCase()}`;
+  const raceRoom = await Room.create({
+    code: raceCode,
+    name: "Start Race Room",
+    status: "lobby",
+    startingBudget: BIDDER_BUDGET,
+    minBidIncrement: MIN_INCREMENT,
+  });
+  const raceRoomId = raceRoom._id as mongoose.Types.ObjectId;
+
+  await AuctionItem.create([
+    { roomId: raceRoomId, name: "Race A", startingBid: STARTING_BID, currentBid: 0, status: "pending" },
+    { roomId: raceRoomId, name: "Race B", startingBid: STARTING_BID, currentBid: 0, status: "pending" },
+    { roomId: raceRoomId, name: "Race C", startingBid: STARTING_BID, currentBid: 0, status: "pending" },
+  ]);
+
+  const raceHostToken = crypto.randomUUID();
+  await Participant.create({
+    roomId: raceRoomId,
+    username: "t_racehost",
+    usernameNormalized: "t_racehost",
+    role: "admin",
+    sessionToken: raceHostToken,
+    budget: BIDDER_BUDGET,
+    spent: 0,
+  });
+
+  const observer = track(await connect(harness.url, { sessionToken: raceHostToken, roomCode: raceCode }));
+  observer.emit("room:connect");
+  await nextEvent(observer, "room:state");
+
+  let startedBroadcasts = 0;
+  let activatedBroadcasts = 0;
+  observer.on("auction:started", () => { startedBroadcasts += 1; });
+  observer.on("item:activated", () => { activatedBroadcasts += 1; });
+
+  const errors: SocketError[] = [];
+  observer.on("error", (e: SocketError) => { errors.push(e); });
+
+  const CONCURRENT = 5;
+  const starters = await Promise.all(
+    Array.from({ length: CONCURRENT }, () =>
+      connect(harness.url, { sessionToken: raceHostToken, roomCode: raceCode })),
+  );
+  for (const s of starters) track(s);
+
+  const starterErrors: SocketError[] = [];
+  for (const s of starters) s.on("error", (e: SocketError) => { starterErrors.push(e); });
+
+  await Promise.all(starters.map((s) => new Promise<void>((resolve) => {
+    s.emit("auction:start");
+    setTimeout(resolve, 0);
+  })));
+  await new Promise((r) => setTimeout(r, 2_500));
+
+  const finalRoom = await Room.findById(raceRoomId);
+  const activeItems = await AuctionItem.countDocuments({ roomId: raceRoomId, status: "active" });
+  const pendingItems = await AuctionItem.countDocuments({ roomId: raceRoomId, status: "pending" });
+
+  assert.equal(finalRoom?.status, "live", "room should be live exactly once");
+  assert.equal(activeItems, 1, `exactly one item should be active, saw ${activeItems}`);
+  assert.equal(pendingItems, 2, "the other two items must stay pending");
+  assert.equal(startedBroadcasts, 1, `exactly one auction:started, saw ${startedBroadcasts}`);
+  assert.equal(activatedBroadcasts, 1, `exactly one item:activated, saw ${activatedBroadcasts}`);
+
+  const losers = starterErrors.filter((e) => e.code === "AUCTION_ALREADY_STARTED");
+  assert.equal(losers.length, CONCURRENT - 1, `${CONCURRENT - 1} starts should be rejected, saw ${losers.length}`);
+
+  for (const s of starters) s.close();
+  observer.close();
+
+  await AuctionItem.deleteMany({ roomId: raceRoomId });
+  await Participant.deleteMany({ roomId: raceRoomId });
+  await Room.deleteMany({ _id: raceRoomId });
+});
+
+test("starting a room with no items leaves it in lobby, not stranded live", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const emptyCode = `T${(Date.now() + 11).toString(36).slice(-5).toUpperCase()}`;
+  const emptyRoom = await Room.create({
+    code: emptyCode,
+    name: "Empty Room",
+    status: "lobby",
+    startingBudget: BIDDER_BUDGET,
+    minBidIncrement: MIN_INCREMENT,
+  });
+  const emptyRoomId = emptyRoom._id as mongoose.Types.ObjectId;
+
+  const emptyHostToken = crypto.randomUUID();
+  await Participant.create({
+    roomId: emptyRoomId,
+    username: "t_emptyhost",
+    usernameNormalized: "t_emptyhost",
+    role: "admin",
+    sessionToken: emptyHostToken,
+    budget: BIDDER_BUDGET,
+    spent: 0,
+  });
+
+  const socket = track(await connect(harness.url, { sessionToken: emptyHostToken, roomCode: emptyCode }));
+  const pending = nextEvent<SocketError>(socket, "error");
+  socket.emit("auction:start");
+
+  assert.equal((await pending).code, "NO_ITEMS");
+  assert.equal((await Room.findById(emptyRoomId))?.status, "lobby", "room must roll back to lobby");
+
+  socket.close();
+  await Participant.deleteMany({ roomId: emptyRoomId });
+  await Room.deleteMany({ _id: emptyRoomId });
 });

@@ -134,11 +134,11 @@ export function AuctionPage() {
       addToast(`New bid: ₹${data.bid.amount.toLocaleString()} by ${data.bid.username}`, "success");
     };
 
-    const handleBidRejected = (data: { reason: string; minimumBid?: number }) => {
+    const handleBidRejected = (data: { code?: string; reason: string; minimumBid?: number }) => {
       addToast(data.reason, "error");
     };
 
-    const handleServerError = (data: { message: string }) => addToast(data.message, "error");
+    const handleServerError = (data: { code?: string; message: string }) => addToast(data.message, "error");
 
     socket.on("item:ended", handleItemEnded);
     socket.on("item:activated", handleItemActivated);

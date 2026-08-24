@@ -8,15 +8,10 @@ import { env } from "../../config/env.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
 import { createRateLimiter } from "../../utils/rateLimiter.js";
 import { readEventField } from "../validation.js";
+import type { BidRejection } from "../errors.js";
 import { logger } from "../../utils/logger.js";
 
 const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
-
-type BidRejection = {
-  reason: string;
-  minimumBid?: number;
-  retryAfterMs?: number;
-};
 
 export function registerBiddingHandlers(io: Server, socket: Socket): void {
   socket.on("bid:place", async (data: unknown) => {
@@ -26,6 +21,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       if (!participant || !cachedRoom) {
         socket.emit("bid:rejected", {
+          code: "NOT_AUTHENTICATED",
           reason: "Not authenticated for any room.",
         } satisfies BidRejection);
         return;
@@ -34,6 +30,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const bidLimit = bidRateLimiter.check(participant._id.toString());
       if (!bidLimit.allowed) {
         socket.emit("bid:rejected", {
+          code: "RATE_LIMITED",
           reason: "You are bidding too quickly. Slow down for a moment.",
           retryAfterMs: bidLimit.retryAfterMs,
         } satisfies BidRejection);
@@ -43,6 +40,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const room = await Room.findById(cachedRoom._id);
       if (!room) {
         socket.emit("bid:rejected", {
+          code: "ROOM_NOT_FOUND",
           reason: "Room not found.",
         } satisfies BidRejection);
         return;
@@ -50,6 +48,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       if (participant.role !== "participant") {
         socket.emit("bid:rejected", {
+          code: "NOT_AUTHORIZED",
           reason: "Access denied: Room hosts are not allowed to place bids.",
         } satisfies BidRejection);
         return;
@@ -60,6 +59,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       if (!room.currentItemId) {
         socket.emit("bid:rejected", {
+          code: "NO_ACTIVE_ITEM",
           reason: "No active bidding item found.",
         } satisfies BidRejection);
         return;
@@ -68,6 +68,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const activeItem = await AuctionItem.findById(room.currentItemId);
       if (!activeItem || activeItem.status !== "active") {
         socket.emit("bid:rejected", {
+          code: "ITEM_CLOSED",
           reason: "Item is not open for bidding.",
         } satisfies BidRejection);
         return;
@@ -75,6 +76,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       if (activeItem.isPaused) {
         socket.emit("bid:rejected", {
+          code: "AUCTION_PAUSED",
           reason: "Bidding is paused by the host.",
           minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
         } satisfies BidRejection);
@@ -84,6 +86,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const amount = readEventField(data, "amount");
       if (!isValidPositiveAmount(amount)) {
         socket.emit("bid:rejected", {
+          code: "INVALID_INPUT",
           reason: "Bid amount must be a valid number.",
           minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
         } satisfies BidRejection);
@@ -93,6 +96,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const freshParticipant = await Participant.findById(participant._id);
       if (!freshParticipant) {
         socket.emit("bid:rejected", {
+          code: "PARTICIPANT_NOT_FOUND",
           reason: "Your participant record no longer exists.",
         } satisfies BidRejection);
         return;
@@ -101,6 +105,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       const remainingBudget = freshParticipant.budget - freshParticipant.spent;
       if (amount > remainingBudget) {
         socket.emit("bid:rejected", {
+          code: "INSUFFICIENT_BUDGET",
           reason: `That exceeds your remaining purse of ₹${remainingBudget.toLocaleString("en-IN")}.`,
           minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
         } satisfies BidRejection);
@@ -114,6 +119,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       );
       if (amount < minimumBidRequired) {
         socket.emit("bid:rejected", {
+          code: "BID_TOO_LOW",
           reason: `Bid amount is too low. Minimum required: ₹${minimumBidRequired}`,
           minimumBid: minimumBidRequired,
         } satisfies BidRejection);
@@ -152,15 +158,17 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         const latestMinimumBid = latestItem
           ? getMinimumBid(latestItem.startingBid, latestItem.currentBid, room.minBidIncrement)
           : undefined;
-        const reason = latestItem?.isPaused
-          ? "Bidding is paused by the host."
-          : latestItem?.endsAt && latestItem.endsAt <= new Date()
-            ? "Bidding time has expired for this item."
+        const expired = Boolean(latestItem?.endsAt && latestItem.endsAt <= new Date());
+        const rejection: BidRejection = latestItem?.isPaused
+          ? { code: "AUCTION_PAUSED", reason: "Bidding is paused by the host." }
+          : expired
+            ? { code: "AUCTION_ENDED", reason: "Bidding time has expired for this item." }
             : latestMinimumBid !== undefined
-              ? `Bid amount is too low. Minimum required: ₹${latestMinimumBid}`
-              : "Your bid could not be placed. Please try again.";
+              ? { code: "BID_TOO_LOW", reason: `Bid amount is too low. Minimum required: ₹${latestMinimumBid}` }
+              : { code: "ITEM_CLOSED", reason: "Your bid could not be placed. Please try again." };
+
         socket.emit("bid:rejected", {
-          reason,
+          ...rejection,
           ...(latestMinimumBid !== undefined ? { minimumBid: latestMinimumBid } : {}),
         } satisfies BidRejection);
         return;
@@ -196,6 +204,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
     } catch (error) {
       logger.error("Error in bid:place handler", { error });
       socket.emit("bid:rejected", {
+        code: "INTERNAL_ERROR",
         reason: "Internal server error placing bid.",
       } satisfies BidRejection);
     }
