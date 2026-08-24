@@ -242,7 +242,7 @@ export function AuctionPage() {
     );
   }
 
-  const isLoading = !room && socketStatus === "connecting";
+  const isLoading = !room && (socketStatus === "connecting" || socketStatus === "reconnecting");
 
   if (isLoading) {
     return (
@@ -312,10 +312,16 @@ export function AuctionPage() {
                   Synced
                 </span>
               )}
-              {socketStatus === "connecting" && (
+              {(socketStatus === "connecting" || socketStatus === "reconnecting") && (
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-amber-400">
                   <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
                   Reconnecting...
+                </span>
+              )}
+              {socketStatus === "disconnected" && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-red-500/10 border border-red-500/20 px-2 py-0.5 text-[10px] font-semibold text-red-400">
+                  <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                  Offline
                 </span>
               )}
             </div>

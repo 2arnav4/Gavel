@@ -3,9 +3,14 @@ import { Participant } from "../../models/participantModel.js";
 import { AuctionItem } from "../../models/itemModel.js";
 import { Bid, type IBid } from "../../models/bidModel.js";
 import { Room } from "../../models/roomModel.js";
+import { env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
+import { createPresenceTracker } from "../presence.js";
 
-const participantSockets = new Map<string, Set<string>>();
+const PRESENCE_GRACE_MS = env.presenceGraceMs;
+
+const presence = createPresenceTracker();
+const pendingOffline = new Map<string, NodeJS.Timeout>();
 
 export function registerRoomHandlers(io: Server, socket: Socket): void {
   socket.on("room:connect", async () => {
@@ -30,11 +35,20 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       socket.join(socketRoomId);
 
       const participantKey = participant._id.toString();
-      const sockets = participantSockets.get(participantKey) ?? new Set<string>();
-      const becameOnline = sockets.size === 0;
-      sockets.add(socket.id);
-      participantSockets.set(participantKey, sockets);
+      const attachResult = presence.attach(participantKey, socket.id);
       socket.data.hasJoinedRoom = true;
+
+      const reconnectedWithinGrace = pendingOffline.get(participantKey);
+      if (reconnectedWithinGrace) {
+        clearTimeout(reconnectedWithinGrace);
+        pendingOffline.delete(participantKey);
+        logger.info("Participant reconnected within the grace period", {
+          roomCode,
+          participantId: participantKey,
+        });
+      }
+
+      const becameOnline = attachResult === "first-socket" && !reconnectedWithinGrace;
 
       if (becameOnline) {
         await Participant.updateOne({ _id: participant._id }, { $set: { isConnected: true } });
@@ -97,28 +111,48 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       const socketRoomId = `room:${roomCode}`;
 
       const participantKey = participant._id.toString();
-      const sockets = participantSockets.get(participantKey);
-      sockets?.delete(socket.id);
-      const becameOffline = !sockets || sockets.size === 0;
-      if (becameOffline) participantSockets.delete(participantKey);
+      if (presence.detach(participantKey, socket.id) !== "last-socket") return;
+      if (pendingOffline.has(participantKey)) return;
 
-      if (!becameOffline) return;
-      await Participant.updateOne({ _id: participant._id }, { $set: { isConnected: false } });
+      const finalizeOffline = async (): Promise<void> => {
+        pendingOffline.delete(participantKey);
+        if (presence.socketCount(participantKey) > 0) return;
 
-      const cleanParticipant = {
-        _id: participant._id,
-        roomId: participant.roomId,
-        username: participant.username,
-        role: participant.role,
-        isConnected: false,
-        joinedAt: participant.joinedAt,
+        try {
+          await Participant.updateOne(
+            { _id: participant._id },
+            { $set: { isConnected: false } },
+          );
+
+          io.to(socketRoomId).emit("participant:left", {
+            participant: {
+              _id: participant._id,
+              roomId: participant.roomId,
+              username: participant.username,
+              role: participant.role,
+              isConnected: false,
+              joinedAt: participant.joinedAt,
+            },
+          });
+
+          logger.info("Participant marked offline after the grace period", {
+            roomCode,
+            participantId: participantKey,
+          });
+        } catch (error) {
+          logger.error("Error finalizing participant disconnect", { error, participantId: participantKey });
+        }
       };
 
-      io.to(socketRoomId).emit("participant:left", {
-        participant: cleanParticipant,
-      });
+      const timer = setTimeout(() => void finalizeOffline(), PRESENCE_GRACE_MS);
+      timer.unref();
+      pendingOffline.set(participantKey, timer);
 
-      logger.info("Participant disconnected", { roomCode, participantId: participant._id.toString() });
+      logger.debug("Participant socket closed, offline pending", {
+        roomCode,
+        participantId: participantKey,
+        graceMs: PRESENCE_GRACE_MS,
+      });
     } catch (error) {
       logger.error("Error in disconnect handler", { error });
     }

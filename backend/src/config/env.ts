@@ -53,6 +53,7 @@ export const env = {
     "DEFAULT_MIN_BID_INCREMENT",
     "500",
   ),
+  presenceGraceMs: getPositiveInteger("PRESENCE_GRACE_MS", "10000"),
   allowPreviewOrigins: getEnv("ALLOW_PREVIEW_ORIGINS", "false") === "true",
   jwtSecret:
     process.env.JWT_SECRET ??

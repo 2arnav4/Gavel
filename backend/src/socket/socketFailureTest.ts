@@ -277,3 +277,108 @@ test("after an accepted bid the minimum moves by the room increment", async (t) 
   assert.equal(rejection.minimumBid, STARTING_BID + MIN_INCREMENT);
   socket.close();
 });
+
+const GRACE_MS = Number(process.env.PRESENCE_GRACE_MS ?? 10_000);
+
+function neverEvent(socket: ClientSocket, event: string, withinMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      socket.off(event, onEvent);
+      resolve(true);
+    }, withinMs);
+
+    function onEvent(): void {
+      clearTimeout(timer);
+      socket.off(event, onEvent);
+      resolve(false);
+    }
+
+    socket.once(event, onEvent);
+  });
+}
+
+async function joinedObserver(): Promise<ClientSocket> {
+  const observer = track(await connect(harness.url, { sessionToken: hostToken, roomCode }));
+  observer.emit("room:connect");
+  await nextEvent(observer, "room:state");
+  return observer;
+}
+
+test("a reconnect inside the grace period does not broadcast a departure", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const observer = await joinedObserver();
+
+  const bidder = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  bidder.emit("room:connect");
+  await nextEvent(bidder, "room:state");
+
+  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3);
+  bidder.close();
+
+  const rejoined = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  rejoined.emit("room:connect");
+  await nextEvent(rejoined, "room:state");
+
+  assert.equal(await noDeparture, true);
+  assert.equal(
+    (await Participant.findOne({ sessionToken: bidderToken }))?.isConnected,
+    true,
+  );
+
+  rejoined.close();
+  observer.close();
+});
+
+test("a participant who does not return is marked offline after the grace period", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const observer = await joinedObserver();
+
+  const leaver = track(await connect(harness.url, { sessionToken: poorToken, roomCode }));
+  leaver.emit("room:connect");
+  await nextEvent(leaver, "room:state");
+
+  const departure = nextEvent<{ participant: { username: string; isConnected: boolean } }>(
+    observer,
+    "participant:left",
+    GRACE_MS * 5 + 2_000,
+  );
+  leaver.close();
+
+  const { participant } = await departure;
+  assert.equal(participant.username, "t_poor");
+  assert.equal(participant.isConnected, false);
+  assert.equal(
+    (await Participant.findOne({ sessionToken: poorToken }))?.isConnected,
+    false,
+  );
+
+  observer.close();
+});
+
+test("a second tab closing leaves the participant online immediately", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const observer = await joinedObserver();
+
+  const tabOne = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  tabOne.emit("room:connect");
+  await nextEvent(tabOne, "room:state");
+
+  const tabTwo = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  tabTwo.emit("room:connect");
+  await nextEvent(tabTwo, "room:state");
+
+  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3);
+  tabTwo.close();
+
+  assert.equal(await noDeparture, true);
+  assert.equal(
+    (await Participant.findOne({ sessionToken: bidderToken }))?.isConnected,
+    true,
+  );
+
+  tabOne.close();
+  observer.close();
+});

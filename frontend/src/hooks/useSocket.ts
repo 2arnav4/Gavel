@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { connectSocket } from "../services/socket";
+import { connectSocket, isFatalSocketError } from "../services/socket";
 import { useSessionStore } from "../stores/useSessionStore";
 import type { AuctionItem, Bid, Participant, Room } from "../services/api";
 
-export type ConnectionStatus = "connecting" | "connected" | "disconnected";
+export type ConnectionStatus = "connecting" | "connected" | "reconnecting" | "disconnected";
 
 function mergeItems(current: AuctionItem[], incoming: AuctionItem[]): AuctionItem[] {
   const byId = new Map(current.map((item) => [item._id, item]));
@@ -34,10 +34,21 @@ export function useSocket(roomCode: string) {
       setError(null);
       socket.emit("room:connect");
     };
-    const handleDisconnect = () => setStatus("disconnected");
+    const handleDisconnect = (reason: string) => {
+      const willRetry = reason !== "io client disconnect" && reason !== "io server disconnect";
+      setStatus(willRetry ? "reconnecting" : "disconnected");
+    };
     const handleConnectError = (connectionError: Error) => {
-      setStatus("disconnected");
-      setError(connectionError.message || "Failed to connect to the realtime server.");
+      const message = connectionError.message || "Failed to connect to the realtime server.";
+
+      if (isFatalSocketError(message)) {
+        socket.disconnect();
+        setStatus("disconnected");
+        setError(message);
+        return;
+      }
+
+      setStatus((current) => (current === "connecting" ? "connecting" : "reconnecting"));
     };
     const handleRoomState = (data: {
       room: Room;

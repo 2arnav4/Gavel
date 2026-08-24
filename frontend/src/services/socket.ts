@@ -30,8 +30,10 @@ export function connectSocket(roomCode: string, sessionToken: string): Socket {
     },
     autoConnect: true,
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
+    reconnectionDelayMax: 10000,
+    randomizationFactor: 0.5,
   });
   activeConnection = requestedConnection;
 
@@ -48,4 +50,8 @@ export function disconnectSocket(): void {
 
 export function getSocket(): Socket | null {
   return socket;
+}
+
+export function isFatalSocketError(message: string): boolean {
+  return message.startsWith("Authentication failed");
 }
