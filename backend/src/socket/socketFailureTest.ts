@@ -33,6 +33,20 @@ function track(socket: ClientSocket): ClientSocket {
   return socket;
 }
 
+async function createBidder(username: string, budget = BIDDER_BUDGET): Promise<string> {
+  const sessionToken = crypto.randomUUID();
+  await Participant.create({
+    roomId,
+    username,
+    usernameNormalized: username,
+    role: "participant",
+    sessionToken,
+    budget,
+    spent: 0,
+  });
+  return sessionToken;
+}
+
 before(async () => {
   try {
     await mongoose.connect(env.mongodbUri, {
@@ -168,7 +182,8 @@ test("a host bidding is rejected and is not told a minimum bid", async (t) => {
 test("a malformed bid payload reports the real minimum, not currentBid + 1", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
 
-  const socket = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  const malformedToken = await createBidder("t_malformed");
+  const socket = track(await connect(harness.url, { sessionToken: malformedToken, roomCode }));
 
   for (const payload of [null, 42, "abc", {}, undefined]) {
     const pending = nextEvent<BidRejection>(socket, "bid:rejected");
@@ -210,16 +225,7 @@ test("a bid beyond the remaining purse is rejected", async (t) => {
 test("the sixth bid inside one second is throttled and carries a retry delay", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
 
-  const throttleToken = crypto.randomUUID();
-  await Participant.create({
-    roomId,
-    username: "t_flood",
-    usernameNormalized: "t_flood",
-    role: "participant",
-    sessionToken: throttleToken,
-    budget: BIDDER_BUDGET,
-    spent: 0,
-  });
+  const throttleToken = await createBidder("t_flood");
 
   const socket = track(await connect(harness.url, { sessionToken: throttleToken, roomCode }));
 
@@ -254,7 +260,8 @@ test("a participant cannot resolve an item", async (t) => {
 test("an accepted bid is written once and broadcast to the room", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
 
-  const socket = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  const acceptToken = await createBidder("t_accept");
+  const socket = track(await connect(harness.url, { sessionToken: acceptToken, roomCode }));
   socket.emit("room:connect");
   await nextEvent(socket, "room:state");
 
@@ -271,7 +278,8 @@ test("an accepted bid is written once and broadcast to the room", async (t) => {
 test("after an accepted bid the minimum moves by the room increment", async (t) => {
   if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
 
-  const socket = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
+  const raiseToken = await createBidder("t_raise");
+  const socket = track(await connect(harness.url, { sessionToken: raiseToken, roomCode }));
   const pending = nextEvent<BidRejection>(socket, "bid:rejected");
   socket.emit("bid:place", { amount: STARTING_BID + 1 });
 
