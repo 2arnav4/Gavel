@@ -10,7 +10,7 @@
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
     "seed": "npm run build && node dist/utils/seed.js",
-    "test": "npm run build && node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js"
+    "test": "npm run build && node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js dist/socket/socketFailureTest.js"
   },
   "dependencies": {
     "@types/cookie-parser": "^1.4.10",
@@ -28,6 +28,7 @@
   "devDependencies": {
     "@types/cors": "^2.8.19",
     "@types/node": "^24.13.2",
+    "socket.io-client": "^4.8.3",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2"
   }
