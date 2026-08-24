@@ -8,6 +8,7 @@ import { AuctionItem } from "../models/itemModel.js";
 import { Bid } from "../models/bidModel.js";
 import { Participant } from "../models/participantModel.js";
 import { Room } from "../models/roomModel.js";
+import { clearAuctionTimer } from "./handlers/resolutionHandler.js";
 import { connect, expectRejectedHandshake, nextEvent, startHarness, type Harness } from "./testHarness.js";
 
 type BidRejection = { reason: string; minimumBid?: number; retryAfterMs?: number };
@@ -79,6 +80,7 @@ before(async () => {
 
 after(async () => {
   if (!dbAvailable) return;
+  clearAuctionTimer(roomId.toString());
   for (const socket of openSockets) socket.close();
   await harness.close();
   await Bid.deleteMany({ roomId });
