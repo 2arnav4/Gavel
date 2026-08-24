@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import * as itemService from "../services/itemService.js";
 import type { AuthenticatedRequest } from "../middleware/authMiddleware.js";
+import { logger } from "../utils/logger.js";
 
 export async function addItemHandler(
   req: AuthenticatedRequest,
@@ -27,9 +28,10 @@ export async function addItemHandler(
       io.to(socketRoomId).emit("item:added", {
         item: newItem,
       });
-      console.log(
-        `Realtime broadcast 'item:added' sent to channel ${socketRoomId} for item: ${newItem.name}`,
-      );
+      logger.debug("Broadcast item:added", {
+        channel: socketRoomId,
+        itemId: newItem._id.toString(),
+      });
     }
 
     res.status(201).json(newItem);

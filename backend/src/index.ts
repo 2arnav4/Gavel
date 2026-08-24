@@ -2,6 +2,7 @@ import { createServer } from "http";
 import mongoose from "mongoose";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
+import { logger } from "./utils/logger.js";
 import { connectDB } from "./config/db.js";
 import { createSocketServer } from "./socket/index.js";
 import { restoreAuctionTimers } from "./socket/handlers/resolutionHandler.js";
@@ -17,7 +18,7 @@ const io = createSocketServer(httpServer);
 app.set("io", io);
 
 httpServer.listen(env.port, () => {
-  console.log(`Server listening on port ${env.port}`);
+  logger.info("Server listening", { port: env.port, environment: env.nodeEnv });
 });
 
 void connectDB().then(async () => {
@@ -27,18 +28,16 @@ void connectDB().then(async () => {
       { $set: { isConnected: false } },
     );
     if (modifiedCount > 0) {
-      console.log(
-        `Cleared ${modifiedCount} stale presence flag(s) from the previous run.`,
-      );
+      logger.info("Cleared stale presence flags from the previous run", { modifiedCount });
     }
   } catch (error) {
-    console.error("Unable to clear stale presence flags:", error);
+    logger.error("Unable to clear stale presence flags", { error });
   }
 
   try {
     await restoreAuctionTimers(io);
   } catch (error) {
-    console.error("Unable to restore auction timers:", error);
+    logger.error("Unable to restore auction timers", { error });
   }
 });
 
@@ -46,10 +45,10 @@ async function shutdown(signal: string): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
 
-  console.log(`${signal} received. Shutting down.`);
+  logger.info("Shutdown signal received", { signal });
 
   const forceExit = setTimeout(() => {
-    console.error("Shutdown timed out. Forcing exit.");
+    logger.error("Shutdown timed out, forcing exit", { timeoutMs: SHUTDOWN_TIMEOUT_MS });
     process.exit(1);
   }, SHUTDOWN_TIMEOUT_MS);
   forceExit.unref();
@@ -59,7 +58,7 @@ async function shutdown(signal: string): Promise<void> {
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     await mongoose.disconnect();
   } catch (error) {
-    console.error("Error during shutdown:", error);
+    logger.error("Error during shutdown", { error });
   }
 
   clearTimeout(forceExit);

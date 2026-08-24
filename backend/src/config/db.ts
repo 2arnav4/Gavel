@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { env } from "./env.js";
+import { logger } from "../utils/logger.js";
 import { Participant } from "../models/participantModel.js";
 import { Room } from "../models/roomModel.js";
 
@@ -59,15 +60,15 @@ async function migrateBudgets(): Promise<void> {
 
 function registerConnectionLogging(): void {
   mongoose.connection.on("connected", () => {
-    console.log("Successfully connected to MongoDB.");
+    logger.info("Connected to MongoDB", { database: env.mongodbDbName });
   });
 
   mongoose.connection.on("error", (err: Error) => {
-    console.error(`MongoDB connection error: ${err.message}`);
+    logger.error("MongoDB connection error", { error: err });
   });
 
   mongoose.connection.on("disconnected", () => {
-    console.warn("MongoDB disconnected. Mongoose will reconnect automatically.");
+    logger.warn("MongoDB disconnected, Mongoose will reconnect automatically");
   });
 }
 
@@ -87,10 +88,11 @@ export async function connectDB(): Promise<void> {
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      console.error(
-        `MongoDB connection attempt ${attempt} failed (${message}). ` +
-          `Retrying in ${Math.round(delay / 1000)}s.`,
-      );
+      logger.error("MongoDB connection attempt failed", {
+        attempt,
+        reason: message,
+        retryInMs: delay,
+      });
 
       await sleep(delay);
       delay = Math.min(delay * 2, MAX_RETRY_DELAY_MS);

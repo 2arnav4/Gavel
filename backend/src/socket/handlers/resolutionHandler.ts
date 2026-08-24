@@ -4,6 +4,7 @@ import { Room } from "../../models/roomModel.js";
 import { AuctionItem, type IAuctionItem } from "../../models/itemModel.js";
 import { Participant } from "../../models/participantModel.js";
 import { getAuctionEndsAt, getExpiryResolution } from "../../utils/auction.js";
+import { logger } from "../../utils/logger.js";
 
 type Resolution = "sold" | "unsold";
 
@@ -155,7 +156,7 @@ async function expireActiveItem(io: Server, roomId: string): Promise<void> {
       scheduleAuctionTimer(io, roomId, item.endsAt);
     }
   } catch (error) {
-    console.error("Error expiring auction item:", error);
+    logger.error("Error expiring auction item", { error, roomId });
   }
 }
 
@@ -182,7 +183,7 @@ export function registerResolutionHandlers(io: Server, socket: Socket): void {
         socket.emit("error", { message });
       }
     } catch (error) {
-      console.error("Error resolving auction item:", error);
+      logger.error("Error resolving auction item", { error, resolution });
       socket.emit("error", { message: "Internal server error resolving item." });
     }
   };

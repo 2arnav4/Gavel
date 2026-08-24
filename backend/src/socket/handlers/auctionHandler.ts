@@ -4,6 +4,7 @@ import { AuctionItem } from "../../models/itemModel.js";
 import { env } from "../../config/env.js";
 import { clearAuctionTimer, scheduleAuctionTimer } from "./resolutionHandler.js";
 import { getAuctionEndsAt } from "../../utils/auction.js";
+import { logger } from "../../utils/logger.js";
 
 async function requireHostRoom(socket: Socket) {
   const participant = socket.data.participant;
@@ -93,9 +94,9 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         endsAt: endsAt.toISOString(),
       });
 
-      console.log(`Lobby ${roomCode} transitioned to LIVE. Active item: ${activeItem.name}`);
+      logger.info("Auction started", { roomCode, itemId: activeItem._id.toString() });
     } catch (error) {
-      console.error("Error in auction:start handler:", error);
+      logger.error("Error in auction:start handler", { error });
       socket.emit("error", { message: "Internal server error starting the auction." });
     }
   });
@@ -134,9 +135,9 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         remainingMs,
       });
 
-      console.log(`Auction ${room.code} paused with ${Math.round(remainingMs / 1000)}s remaining.`);
+      logger.info("Auction paused", { roomCode: room.code, remainingMs });
     } catch (error) {
-      console.error("Error in auction:pause handler:", error);
+      logger.error("Error in auction:pause handler", { error });
       socket.emit("error", { message: "Internal server error pausing the auction." });
     }
   });
@@ -178,9 +179,9 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         serverTime: new Date().toISOString(),
       });
 
-      console.log(`Auction ${room.code} resumed with ${Math.round(remainingMs / 1000)}s remaining.`);
+      logger.info("Auction resumed", { roomCode: room.code, remainingMs });
     } catch (error) {
-      console.error("Error in auction:resume handler:", error);
+      logger.error("Error in auction:resume handler", { error });
       socket.emit("error", { message: "Internal server error resuming the auction." });
     }
   });

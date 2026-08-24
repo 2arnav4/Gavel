@@ -3,6 +3,7 @@ import { Participant } from "../../models/participantModel.js";
 import { AuctionItem } from "../../models/itemModel.js";
 import { Bid, type IBid } from "../../models/bidModel.js";
 import { Room } from "../../models/roomModel.js";
+import { logger } from "../../utils/logger.js";
 
 const participantSockets = new Map<string, Set<string>>();
 
@@ -78,9 +79,9 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
         });
       }
 
-      console.log(`User ${participant.username} connected to auction room ${roomCode}`);
+      logger.info("Participant connected", { roomCode, participantId: participant._id.toString() });
     } catch (error) {
-      console.error("Error in room:connect handler:", error);
+      logger.error("Error in room:connect handler", { error });
       socket.emit("error", { message: "Internal server error during room connect." });
     }
   });
@@ -117,9 +118,9 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
         participant: cleanParticipant,
       });
 
-      console.log(`User ${participant.username} disconnected from auction room ${roomCode}`);
+      logger.info("Participant disconnected", { roomCode, participantId: participant._id.toString() });
     } catch (error) {
-      console.error("Error in disconnect handler:", error);
+      logger.error("Error in disconnect handler", { error });
     }
   });
 }

@@ -8,6 +8,7 @@ import { env } from "../../config/env.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
 import { createRateLimiter } from "../../utils/rateLimiter.js";
 import { readEventField } from "../validation.js";
+import { logger } from "../../utils/logger.js";
 
 const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
 
@@ -186,9 +187,14 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         item: updatedItem,
       });
 
-      console.log(`Bid of ₹${amount} placed by ${participant.username} on item ${updatedItem.name}`);
+      logger.info("Bid accepted", {
+        roomCode,
+        itemId: updatedItem._id.toString(),
+        participantId: participant._id.toString(),
+        amount,
+      });
     } catch (error) {
-      console.error("Error in bid:place handler:", error);
+      logger.error("Error in bid:place handler", { error });
       socket.emit("bid:rejected", {
         reason: "Internal server error placing bid.",
       } satisfies BidRejection);

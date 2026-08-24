@@ -3,6 +3,7 @@ import { isDatabaseConnected } from "../../config/db.js";
 import { AppError } from "../../middleware/errorHandler.js";
 import { Participant } from "../../models/participantModel.js";
 import { Room } from "../../models/roomModel.js";
+import { logger } from "../../utils/logger.js";
 import { readHandshakeAuth, toSocketMessage } from "../validation.js";
 
 export async function socketAuthMiddleware(
@@ -34,7 +35,7 @@ export async function socketAuthMiddleware(
     next();
   } catch (error) {
     if (!(error instanceof AppError)) {
-      console.error("Socket authentication middleware error:", error);
+      logger.error("Socket authentication failed unexpectedly", { error });
     }
     next(new Error(`Authentication failed: ${toSocketMessage(error)}`));
   }
