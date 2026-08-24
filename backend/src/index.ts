@@ -5,7 +5,7 @@ import { env } from "./config/env.js";
 import { logger } from "./utils/logger.js";
 import { connectDB } from "./config/db.js";
 import { createSocketServer } from "./socket/index.js";
-import { restoreAuctionTimers } from "./socket/handlers/resolutionHandler.js";
+import { clearAllAuctionTimers, restoreAuctionTimers } from "./socket/handlers/resolutionHandler.js";
 import { Participant } from "./models/participantModel.js";
 
 const app = createApp();
@@ -54,6 +54,11 @@ async function shutdown(signal: string): Promise<void> {
   forceExit.unref();
 
   try {
+    const clearedTimers = clearAllAuctionTimers();
+    if (clearedTimers > 0) {
+      logger.info("Cleared in-process auction timers", { clearedTimers });
+    }
+
     await new Promise<void>((resolve) => io.close(() => resolve()));
     await new Promise<void>((resolve) => httpServer.close(() => resolve()));
     await mongoose.disconnect();

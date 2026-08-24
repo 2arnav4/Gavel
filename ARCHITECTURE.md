@@ -218,7 +218,30 @@ Both fields now pass through `socket/validation.ts`, which reuses the same `requ
 
 Errors crossing back out are translated by `toSocketMessage`: an `AppError` keeps its message (the client's request was malformed), and anything else collapses to a generic string (the server broke). The HTTP `statusCode` on `AppError` is dropped, since sockets have no status codes.
 
-### 8. Database Availability
+### 8. Identity Is Per-Room, Not Global
+The JWT carries `{ username, role }`, and `role` is hardcoded to `"participant"` at both login and register. That is deliberate, not an oversight: the JWT proves *who you are across the platform*, while the authority to run an auction belongs to a specific room. Host authority lives on the `Participant` document (`role: "admin"`), created when you call `POST /api/rooms`. Every host-only action re-reads that document server-side. A client editing its own token or local storage to claim `admin` changes nothing, because nothing reads role from the client.
+
+The consequence to know: the `role` field inside the JWT is effectively decorative and should not be trusted for authorization. It is retained because the frontend uses it for cosmetic hints only.
+
+### 9. Logout Does Not Terminate a Live Socket
+`POST /api/auth/logout` clears the cookie. It does not revoke the JWT — the token stays valid until its 24h expiry — and it does not touch the participant `sessionToken`, so a socket that is already connected keeps working. That is the ordinary trade for stateless JWT: no server-side session store, at the cost of no instant revocation.
+
+Where instant revocation is actually needed — a leaked token, a compromised deployment — the tool is `npm run rotate-sessions`, which regenerates every participant `sessionToken` so reconnects fail, followed by a restart to drop live sockets.
+
+### 10. Two Writes Per Accepted Bid
+An accepted bid performs the atomic claim on the item, then saves a `Bid` document as a separate write. There is no transaction. If the second write fails, the item still carries the correct `currentBid` and `highestBidderId` — the auction stays correct, because the item is the source of truth for price — but the append-only log is missing an entry.
+
+This is a deliberate trade. A multi-document transaction on the hot path costs more than the invariant is worth, and the failure mode degrades an audit log rather than the auction itself.
+
+### 11. Health Reports 200 While Degraded
+`GET /health` returns HTTP 200 even when MongoDB is disconnected, with `status: "degraded"` and `ready: false` in the body. A transient database blip should not cause the platform to kill an otherwise healthy process, so readiness is expressed in the payload rather than the status code. Callers that care must read `ready`, not the status line.
+
+Note the path: the health router is mounted at `/health`, outside the `/api` prefix. `/api/health` is a 404.
+
+### 12. Timers on Shutdown
+Auction countdowns are in-process `setTimeout` handles. Shutdown clears them explicitly before closing Socket.IO, so nothing fires against a closing server, but that is tidiness rather than correctness — they would die with the process regardless. Correctness comes from `restoreAuctionTimers()`, which rebuilds every live room's timer from the `endsAt` stored on the room. A deadline survives a restart because the database, not the process, holds it.
+
+### 13. Database Availability
 MongoDB is treated as a runtime dependency, not a startup precondition. The HTTP port binds first and the connection retries with exponential backoff, so an unreachable database degrades the API instead of failing the deploy. While disconnected, both entry points refuse work at the door — REST returns `503` and the socket handshake rejects with the same explanation — rather than letting queries sit in Mongoose's buffer until it times out.
 
 ---

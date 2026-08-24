@@ -11,6 +11,13 @@ type Resolution = "sold" | "unsold";
 
 const auctionTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+export function clearAllAuctionTimers(): number {
+  const count = auctionTimers.size;
+  for (const timer of auctionTimers.values()) clearTimeout(timer);
+  auctionTimers.clear();
+  return count;
+}
+
 export function hasAuctionTimer(roomId: string): boolean {
   return auctionTimers.has(roomId);
 }

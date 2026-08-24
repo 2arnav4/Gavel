@@ -172,6 +172,7 @@ export function AuthPortal() {
               <input
                 id="auth-username"
                 type="text"
+                autoComplete="username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="e.g. Alice"
@@ -192,9 +193,10 @@ export function AuthPortal() {
                 <input
                   id="auth-password"
                   type={showPassword ? "text" : "password"}
+                  autoComplete={activeTab === "signup" ? "new-password" : "current-password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="password123"
+                  placeholder="••••••••"
                   disabled={loading}
                   className="w-full bg-surface-overlay border border-border focus:border-accent/50 focus:ring-1 focus:ring-accent/20 rounded-lg px-4 py-2 pr-10 text-xs text-text-primary placeholder:text-text-muted transition-all outline-none"
                 />

@@ -73,6 +73,7 @@ const AuctionItemSchema = new Schema<IAuctionItem>(
 );
 
 AuctionItemSchema.index({ roomId: 1, status: 1, createdAt: 1 });
+AuctionItemSchema.index({ roomId: 1, createdAt: 1 });
 
 export const AuctionItem = mongoose.model<IAuctionItem>(
   "AuctionItem",
