@@ -10,6 +10,12 @@ import { createRateLimiter } from "../../utils/rateLimiter.js";
 
 const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
 
+type BidRejection = {
+  reason: string;
+  minimumBid?: number;
+  retryAfterMs?: number;
+};
+
 export function registerBiddingHandlers(io: Server, socket: Socket): void {
   socket.on("bid:place", async (data: { amount?: unknown }) => {
     try {
@@ -19,8 +25,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!participant || !cachedRoom) {
         socket.emit("bid:rejected", {
           reason: "Not authenticated for any room.",
-          minimumBid: 1,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -28,9 +33,8 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!bidLimit.allowed) {
         socket.emit("bid:rejected", {
           reason: "You are bidding too quickly. Slow down for a moment.",
-          minimumBid: 1,
           retryAfterMs: bidLimit.retryAfterMs,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -38,16 +42,14 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!room) {
         socket.emit("bid:rejected", {
           reason: "Room not found.",
-          minimumBid: 1,
-        });
+        } satisfies BidRejection);
         return;
       }
 
       if (participant.role !== "participant") {
         socket.emit("bid:rejected", {
           reason: "Access denied: Room hosts are not allowed to place bids.",
-          minimumBid: 0,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -57,8 +59,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!room.currentItemId) {
         socket.emit("bid:rejected", {
           reason: "No active bidding item found.",
-          minimumBid: 1,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -66,8 +67,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!activeItem || activeItem.status !== "active") {
         socket.emit("bid:rejected", {
           reason: "Item is not open for bidding.",
-          minimumBid: 1,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -75,7 +75,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         socket.emit("bid:rejected", {
           reason: "Bidding is paused by the host.",
           minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -83,14 +83,16 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (!isValidPositiveAmount(amount)) {
         socket.emit("bid:rejected", {
           reason: "Bid amount must be a valid number.",
-          minimumBid: activeItem.currentBid + 1,
-        });
+          minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
+        } satisfies BidRejection);
         return;
       }
 
       const freshParticipant = await Participant.findById(participant._id);
       if (!freshParticipant) {
-        socket.emit("bid:rejected", { reason: "Your participant record no longer exists.", minimumBid: 1 });
+        socket.emit("bid:rejected", {
+          reason: "Your participant record no longer exists.",
+        } satisfies BidRejection);
         return;
       }
 
@@ -99,7 +101,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         socket.emit("bid:rejected", {
           reason: `That exceeds your remaining purse of ₹${remainingBudget.toLocaleString("en-IN")}.`,
           minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -112,7 +114,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         socket.emit("bid:rejected", {
           reason: `Bid amount is too low. Minimum required: ₹${minimumBidRequired}`,
           minimumBid: minimumBidRequired,
-        });
+        } satisfies BidRejection);
         return;
       }
 
@@ -147,16 +149,18 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         const latestItem = await AuctionItem.findById(activeItem._id);
         const latestMinimumBid = latestItem
           ? getMinimumBid(latestItem.startingBid, latestItem.currentBid, room.minBidIncrement)
-          : 1;
+          : undefined;
         const reason = latestItem?.isPaused
           ? "Bidding is paused by the host."
           : latestItem?.endsAt && latestItem.endsAt <= new Date()
             ? "Bidding time has expired for this item."
-            : `Bid amount is too low. Minimum required: ₹${latestMinimumBid}`;
+            : latestMinimumBid !== undefined
+              ? `Bid amount is too low. Minimum required: ₹${latestMinimumBid}`
+              : "Your bid could not be placed. Please try again.";
         socket.emit("bid:rejected", {
           reason,
-          minimumBid: latestMinimumBid,
-        });
+          ...(latestMinimumBid !== undefined ? { minimumBid: latestMinimumBid } : {}),
+        } satisfies BidRejection);
         return;
       }
 
@@ -186,8 +190,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       console.error("Error in bid:place handler:", error);
       socket.emit("bid:rejected", {
         reason: "Internal server error placing bid.",
-        minimumBid: 1,
-      });
+      } satisfies BidRejection);
     }
   });
 }

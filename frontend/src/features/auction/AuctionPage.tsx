@@ -134,7 +134,7 @@ export function AuctionPage() {
       addToast(`New bid: ₹${data.bid.amount.toLocaleString()} by ${data.bid.username}`, "success");
     };
 
-    const handleBidRejected = (data: { reason: string; minimumBid: number }) => {
+    const handleBidRejected = (data: { reason: string; minimumBid?: number }) => {
       addToast(data.reason, "error");
     };
 
