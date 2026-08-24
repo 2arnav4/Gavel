@@ -52,7 +52,7 @@ Socket connections are room-scoped. The client sends a per-room `sessionToken` d
 | `room:connect` | Client → Server | *None* | Sent after every connect. Identity comes from the handshake, so no payload is needed. Triggers a full state synchronization. |
 | `room:state` | Server → Client | `{ room, participants, activeItem, bids, items, serverTime }` | Sent only to the requesting socket. `activeItem` and `bids` are populated when the room is live; `serverTime` lets the client measure its clock offset. |
 | `participant:joined` | Server → Client | `{ participant }` | Broadcast to the rest of the room when a bidder comes online. Not re-sent for a second tab. |
-| `participant:left` | Server → Client | `{ participant }` | Broadcast when a bidder's last socket disconnects. |
+| `participant:left` | Server → Client | `{ participant }` | Broadcast when a bidder's last socket has been gone for the full presence grace period (`PRESENCE_GRACE_MS`, default 10s). A reconnect inside that window cancels it, so a transient network drop produces no roster flicker. |
 | `item:added` | Server → Client | `{ item }` | Emitted from the REST item handler so lobby catalogs update without a refetch. |
 | `auction:start` | Client → Server | *None* | Host only. Moves the room from `lobby` to `live`. |
 | `auction:started` | Server → Client | `{ room }` | Tells every client to move from the lobby to the auction board. |
@@ -61,9 +61,9 @@ Socket connections are room-scoped. The client sends a per-room `sessionToken` d
 | `auction:paused` | Server → Client | `{ itemId, remainingMs }` | Broadcast when the clock stops. `remainingMs` is what the client renders in place of a live countdown. |
 | `auction:resume` | Client → Server | *None* | Host only. Restarts the countdown from where it stopped. |
 | `auction:resumed` | Server → Client | `{ item, endsAt, serverTime }` | Broadcast with the new absolute deadline and the server clock for offset correction. |
-| `bid:place` | Client → Server | `{ amount: number }` | Bidders only. Hosts are rejected. |
+| `bid:place` | Client → Server | `{ amount: number }` | Bidders only. Hosts are rejected. The payload is read defensively: a non-object payload yields `undefined` rather than throwing. |
 | `bid:accepted` | Server → Client | `{ bid, item }` | Broadcast to the room. `item` carries the new highest bid and the extended `endsAt`. |
-| `bid:rejected` | Server → Client | `{ reason: string, minimumBid: number }` | Sent only to the submitting socket. |
+| `bid:rejected` | Server → Client | `{ reason: string, minimumBid?: number, retryAfterMs?: number }` | Sent only to the submitting socket. `minimumBid` is present only when the server actually read the active item; it is omitted rather than invented on paths that rejected earlier. `retryAfterMs` appears only on throttled bids. |
 | `item:sell` | Client → Server | *None* | Host only. Requires at least one accepted bid. |
 | `item:unsold` | Client → Server | *None* | Host only. Clears any recorded highest bidder. |
 | `item:ended` | Server → Client | `{ item, resolution: "sold" \| "unsold", winner }` | The item was resolved, by the host or by expiry. `winner` is the debited participant on a sale, `null` otherwise. |
@@ -200,10 +200,25 @@ Every bidder holds a purse (`budget`) and a running total (`spent`). A bid is re
 
 That assumption is load-bearing. Auctioning several items simultaneously would break it: two bids could each pass the check and together exceed the purse. The fix then is a conditional decrement on the participant, `{ _id, $expr: { $gte: [{ $subtract: ["$budget", "$spent"] }, amount] } }`, reserving at bid time and refunding on outbid — which is precisely the complexity the sequential design avoids.
 
-### 6. Presence After a Restart
-Presence is tracked two ways: an in-memory map of participant id to live socket ids, which allows multiple tabs without duplicate join broadcasts, and an `isConnected` flag persisted on the participant so `room:state` can render the roster. A restart loses the map but not the flag, which would leave every previous bidder shown as permanently online. Startup therefore clears all `isConnected` flags before restoring timers; live clients re-register on their next `room:connect`.
+### 6. Presence, Reconnects and Restarts
+Presence is tracked two ways: an in-memory tracker (`socket/presence.ts`) mapping participant id to live socket ids, which allows multiple tabs without duplicate join broadcasts, and an `isConnected` flag persisted on the participant so `room:state` can render the roster.
 
-### 7. Database Availability
+Losing the last socket does not immediately mark a participant offline. It arms an unref'd `setTimeout` of `PRESENCE_GRACE_MS` (default 10s). If the participant reconnects inside that window the timer is cancelled, the database is never written, and no `participant:left` or `participant:joined` is broadcast — the room never sees the blip. If they do not return, the timer fires, re-checks the socket count, and only then persists `isConnected: false` and broadcasts the departure.
+
+The grace period exists because the common failure is not a clean close. A wifi hiccup drops the socket, the client reconnects a second later, and the previous design broadcast a leave immediately followed by a join. Every bidder in the room saw the roster flicker on every transient drop.
+
+A restart loses the tracker but not the flag, which would leave every previous bidder shown as permanently online. Startup therefore clears all `isConnected` flags before restoring timers; live clients re-register on their next `room:connect`.
+
+### 7. The Socket Handshake Is an Untrusted Boundary
+`socket.handshake.auth` is client-controlled JSON, and the two fields read from it — `sessionToken` and `roomCode` — reach a Mongoose query and a string method respectively. Neither is typed by the transport.
+
+Mongoose does not cast or reject a query operator object supplied where a `String` path is expected. A handshake sending `sessionToken: { "$ne": null }` therefore reached the driver as a comparison expression rather than a literal, and `Participant.findOne` returned an arbitrary real participant — an authentication bypass requiring no credentials at all. `{ "$gt": "" }`, `{ "$regex": ".*" }` and `{ "$exists": true }` behaved identically.
+
+Both fields now pass through `socket/validation.ts`, which reuses the same `requireString` guard the HTTP boundary already uses. A non-string is rejected before it can reach a query, which closes the injection and also removes the `roomCode.toUpperCase()` TypeError that previously surfaced to clients as "Internal server error".
+
+Errors crossing back out are translated by `toSocketMessage`: an `AppError` keeps its message (the client's request was malformed), and anything else collapses to a generic string (the server broke). The HTTP `statusCode` on `AppError` is dropped, since sockets have no status codes.
+
+### 8. Database Availability
 MongoDB is treated as a runtime dependency, not a startup precondition. The HTTP port binds first and the connection retries with exponential backoff, so an unreachable database degrades the API instead of failing the deploy. While disconnected, both entry points refuse work at the door — REST returns `503` and the socket handshake rejects with the same explanation — rather than letting queries sit in Mongoose's buffer until it times out.
 
 ---
