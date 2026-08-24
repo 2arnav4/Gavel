@@ -1,5 +1,5 @@
 import type { Server, Socket } from "socket.io";
-import { AuctionItem } from "../../models/itemModel.js";
+import { AuctionItem, type IAuctionItem } from "../../models/itemModel.js";
 import { Bid } from "../../models/bidModel.js";
 import { Participant } from "../../models/participantModel.js";
 import { Room } from "../../models/roomModel.js";
@@ -65,30 +65,32 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      const activeItem = await AuctionItem.findById(room.currentItemId);
-      if (!activeItem || activeItem.status !== "active") {
-        socket.emit("bid:rejected", {
-          code: "ITEM_CLOSED",
-          reason: "Item is not open for bidding.",
-        } satisfies BidRejection);
-        return;
-      }
+      const itemId = room.currentItemId;
 
-      if (activeItem.isPaused) {
-        socket.emit("bid:rejected", {
-          code: "AUCTION_PAUSED",
-          reason: "Bidding is paused by the host.",
-          minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
-        } satisfies BidRejection);
-        return;
-      }
+      let itemLoaded = false;
+      let loadedItem: IAuctionItem | null = null;
+
+      const readItem = async (): Promise<IAuctionItem | null> => {
+        if (!itemLoaded) {
+          loadedItem = await AuctionItem.findById(itemId);
+          itemLoaded = true;
+        }
+        return loadedItem;
+      };
+
+      const readMinimumBid = async (): Promise<number | undefined> => {
+        const item = await readItem();
+        return item
+          ? getMinimumBid(item.startingBid, item.currentBid, room.minBidIncrement)
+          : undefined;
+      };
 
       const amount = readEventField(data, "amount");
       if (!isValidPositiveAmount(amount)) {
         socket.emit("bid:rejected", {
           code: "INVALID_INPUT",
           reason: "Bid amount must be a valid number.",
-          minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
+          minimumBid: await readMinimumBid(),
         } satisfies BidRejection);
         return;
       }
@@ -107,21 +109,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         socket.emit("bid:rejected", {
           code: "INSUFFICIENT_BUDGET",
           reason: `That exceeds your remaining purse of ₹${remainingBudget.toLocaleString("en-IN")}.`,
-          minimumBid: getMinimumBid(activeItem.startingBid, activeItem.currentBid, room.minBidIncrement),
-        } satisfies BidRejection);
-        return;
-      }
-
-      const minimumBidRequired = getMinimumBid(
-        activeItem.startingBid,
-        activeItem.currentBid,
-        room.minBidIncrement,
-      );
-      if (amount < minimumBidRequired) {
-        socket.emit("bid:rejected", {
-          code: "BID_TOO_LOW",
-          reason: `Bid amount is too low. Minimum required: ₹${minimumBidRequired}`,
-          minimumBid: minimumBidRequired,
+          minimumBid: await readMinimumBid(),
         } satisfies BidRejection);
         return;
       }
@@ -130,7 +118,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       const updatedItem = await AuctionItem.findOneAndUpdate(
         {
-          _id: activeItem._id,
+          _id: itemId,
           status: "active",
           isPaused: false,
           endsAt: { $gt: new Date() },
@@ -154,29 +142,38 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       );
 
       if (!updatedItem) {
-        const latestItem = await AuctionItem.findById(activeItem._id);
-        const latestMinimumBid = latestItem
-          ? getMinimumBid(latestItem.startingBid, latestItem.currentBid, room.minBidIncrement)
-          : undefined;
-        const expired = Boolean(latestItem?.endsAt && latestItem.endsAt <= new Date());
-        const rejection: BidRejection = latestItem?.isPaused
+        const latestItem = await readItem();
+
+        if (!latestItem || latestItem.status !== "active") {
+          socket.emit("bid:rejected", {
+            code: "ITEM_CLOSED",
+            reason: "Item is not open for bidding.",
+          } satisfies BidRejection);
+          return;
+        }
+
+        const latestMinimumBid = getMinimumBid(
+          latestItem.startingBid,
+          latestItem.currentBid,
+          room.minBidIncrement,
+        );
+        const expired = Boolean(latestItem.endsAt && latestItem.endsAt <= new Date());
+        const rejection: BidRejection = latestItem.isPaused
           ? { code: "AUCTION_PAUSED", reason: "Bidding is paused by the host." }
           : expired
             ? { code: "AUCTION_ENDED", reason: "Bidding time has expired for this item." }
-            : latestMinimumBid !== undefined
-              ? { code: "BID_TOO_LOW", reason: `Bid amount is too low. Minimum required: ₹${latestMinimumBid}` }
-              : { code: "ITEM_CLOSED", reason: "Your bid could not be placed. Please try again." };
+            : { code: "BID_TOO_LOW", reason: `Bid amount is too low. Minimum required: ₹${latestMinimumBid}` };
 
         socket.emit("bid:rejected", {
           ...rejection,
-          ...(latestMinimumBid !== undefined ? { minimumBid: latestMinimumBid } : {}),
+          minimumBid: latestMinimumBid,
         } satisfies BidRejection);
         return;
       }
 
       const newBid = new Bid({
         roomId: room._id,
-        itemId: activeItem._id,
+        itemId,
         participantId: participant._id,
         username: participant.username,
         amount,

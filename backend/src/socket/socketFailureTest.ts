@@ -511,3 +511,67 @@ test("starting a room with no items leaves it in lobby, not stranded live", asyn
   await Participant.deleteMany({ roomId: emptyRoomId });
   await Room.deleteMany({ _id: emptyRoomId });
 });
+
+
+type ItemModelSpy = { findById: typeof AuctionItem.findById };
+
+async function countItemReads(run: () => Promise<void>): Promise<number> {
+  const model = AuctionItem as unknown as ItemModelSpy;
+  const original = model.findById;
+  let reads = 0;
+
+  model.findById = ((...args: Parameters<typeof AuctionItem.findById>) => {
+    reads += 1;
+    return original.apply(AuctionItem, args);
+  }) as typeof AuctionItem.findById;
+
+  try {
+    await run();
+  } finally {
+    model.findById = original;
+  }
+
+  return reads;
+}
+
+test("an accepted bid performs no pre-claim item read", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_noread");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  socket.emit("room:connect");
+  await nextEvent(socket, "room:state");
+
+  const live = await AuctionItem.findOne({ roomId, status: "active" });
+  assert.ok(live, "precondition: an active item exists");
+  const winningAmount = live!.currentBid > 0
+    ? live!.currentBid + MIN_INCREMENT
+    : live!.startingBid;
+
+  const reads = await countItemReads(async () => {
+    const accepted = nextEvent(socket, "bid:accepted");
+    socket.emit("bid:place", { amount: winningAmount });
+    await accepted;
+  });
+
+  assert.equal(reads, 0, "the successful bid path must not read the item outside the atomic claim");
+  socket.close();
+});
+
+test("a losing bid reads the item exactly once, after the claim", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_oneread");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+
+  const reads = await countItemReads(async () => {
+    const rejected = nextEvent<BidRejection>(socket, "bid:rejected");
+    socket.emit("bid:place", { amount: 1 });
+    const rejection = await rejected;
+    assert.equal(rejection.code, "BID_TOO_LOW");
+    assert.ok(rejection.minimumBid !== undefined, "a losing bid must still carry an accurate minimum");
+  });
+
+  assert.equal(reads, 1, "a losing bid must read the item once, not twice");
+  socket.close();
+});
