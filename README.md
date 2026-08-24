@@ -49,18 +49,59 @@ Roles are per-room, not global: whoever creates a room is that room's host, and 
 
 ## Architecture
 
+Two entry points, one source of truth. A REST request and a socket event both
+end at the same MongoDB documents, and neither layer holds authoritative state.
+
 ```mermaid
-flowchart LR
-  C["React client"] -->|"REST: auth, rooms, items"| API["Express API"]
-  C <-->|"Socket.IO: bids, presence, timers"| SIO["Socket.IO server"]
-  API --> DB[("MongoDB")]
-  SIO --> DB
-  T["In-memory timers"] --> SIO
+flowchart TB
+  subgraph Client ["Browser"]
+    UI["React 19 + Zustand"]
+  end
+
+  subgraph HTTP ["REST path — request/response"]
+    direction TB
+    RL["rateLimit()"] --> RT["routes/"]
+    RT --> CT["controllers/<br/><i>thin: parse, delegate, respond</i>"]
+    CT --> SV["services/<br/><i>validation + business rules</i>"]
+  end
+
+  subgraph WS ["Socket path — continuous"]
+    direction TB
+    AUTH["socketAuthMiddleware<br/><i>readHandshakeAuth → typed</i>"] --> HD["handlers/<br/>room · auction · bidding · resolution"]
+  end
+
+  subgraph Process ["In-process state"]
+    TIMERS["Auction countdowns"]
+    PRES["Presence tracker"]
+    LIMIT["Bid rate limiter"]
+  end
+
+  DB[("MongoDB Atlas<br/>rooms · participants<br/>auctionitems · bids")]
+
+  UI -->|"auth, rooms, items"| RL
+  UI <-->|"bid:place, auction:*, item:*"| AUTH
+  SV --> DB
+  HD --> DB
+  HD --- LIMIT
+  HD --- PRES
+  TIMERS -->|"on expiry"| HD
+  HD -->|"io.to(room:CODE).emit"| UI
+  CT -.->|"io.to(...).emit item:added"| UI
+  DB -.->|"restoreAuctionTimers() on boot"| TIMERS
 ```
+
+The dotted edges are the two places the layers cross. The REST item controller
+reaches for `io` so a lobby catalog updates without a refetch, and the process
+rebuilds its timers from `endsAt` on the documents at boot, because a restart
+must not silently orphan a running auction.
+
+Validation happens once, at whichever boundary the data arrives through:
+`utils/validation.ts` for REST bodies, and the same guards re-used through
+`socket/validation.ts` for the handshake. Nothing untrusted reaches a query.
 
 REST handles anything request/response shaped — authentication, creating and joining rooms, adding catalog items, fetching results. Socket.IO handles everything continuous — presence, bids, item activation, resolution. MongoDB is the only source of truth; the socket layer broadcasts state, it does not own it.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the event map, concurrency control, and schema, and [DECISIONS.md](DECISIONS.md) for the trade-offs behind these choices.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the event map, concurrency control, and schema, [DECISIONS.md](DECISIONS.md) for the trade-offs behind these choices, and [SCALING.md](SCALING.md) for what breaks first under load.
 
 ## Realtime Design
 
@@ -193,18 +234,18 @@ To see the concurrency handling directly, open two bidder windows and submit the
 - **Single instance only.** Countdown timers live in an in-memory `Map` keyed by room id. Running two backend instances behind a load balancer would fragment that map, and Socket.IO broadcasts would not reach clients on the other instance. Horizontal scaling needs the Redis adapter plus a shared scheduler. This is the most significant limitation.
 - **Cold starts.** The free Render tier sleeps when idle; the first request can take up to a minute.
 - **Room reads are deliberately public.** Anyone holding a room code can call `GET /api/rooms/:code` and `/results`. The code is the invitation, and requiring an account to view a shared link would defeat that. Neither route returns a session token, so a code grants visibility and never control. Every write is authorized.
-- **No rate limiting** on authentication or bid submission. A determined client can spam `bid:place`; each attempt is validated and rejected correctly, but nothing throttles the attempts.
+- **Rate limiting is per-process.** Login and registration share a fixed window per IP, and `bid:place` is capped per participant per second. Both counters live in a `Map` inside the one Node process, so a second instance would double the effective budget, and a restart hands everyone a fresh window.
 - **Unbounded anti-snipe.** Every accepted bid restores the full countdown, so two determined bidders can keep an item open indefinitely — though the minimum raise means the price climbs every time they do, so it terminates once someone's purse runs out. A production auction would also cap total duration or reset to a shorter window.
 - **Flat bid increment.** The minimum raise is a single figure per room. Real auctions use a tiered ladder that widens as the price climbs, so a ₹500 step is not still in force at ₹40,00,000.
-- **Request bodies are validated by hand.** Every field is type-checked at the service boundary, but there is no schema library, so the rules live in code rather than in one declarative place. Zod at the boundary would be the next step.
-- **Tests cover the concurrency primitives, not the transport.** The conditional updates that make bidding and resolution safe are tested against a real MongoDB, but the socket handlers wrapping them are verified manually across browser windows.
+- **Input is validated by hand, on purpose.** Every field is type-checked at the boundary it arrives through, REST and socket alike, but there is no schema library. A second declarative idiom alongside the existing tested guards would make the codebase harder to reason about, not easier, so adding one was considered and rejected. The cost is that the rules live in code rather than in one place.
+- **Tests reach the transport but not the browser.** The conditional updates and the socket handlers are both tested against a real MongoDB and a real Socket.IO client, including handshake rejection, bid failure paths and the reconnect grace period. What is still manual is anything above the socket: React rendering, and the client-side reconnect behaviour under a genuinely flaky network.
 - **The auth JWT is readable by JavaScript.** The API is on a different domain than the app, so its cookie is third-party and blocked by default in Chrome incognito and under Safari/Firefox tracking protection. The token is therefore also held client-side and sent as a bearer header, which trades HTTP-only protection for actually working. Serving both from one origin would remove the trade-off — see [DECISIONS.md](DECISIONS.md).
 - **Demo accounts share one password.** `demo` / `password123` is a shared demo login that mints a distinct alias per sign-in. Convenient for a walkthrough, obviously not an authentication model.
 
 ## Future Improvements
 
-- Redis adapter and a distributed scheduler for multi-instance deployment.
-- Integration tests for concurrent bids and resolution races.
+- Redis adapter and a distributed scheduler for multi-instance deployment — see [SCALING.md](SCALING.md) for the ordering and what breaks first.
+- Idempotency keys on `bid:place`, so a client retrying after a reconnect cannot double-bid.
 - Team squads and per-category caps on top of the existing per-bidder budget.
 - Bounded anti-snipe: cap total extensions, or reset to a shorter window than the opening one.
 - Spectator (read-only) role.
