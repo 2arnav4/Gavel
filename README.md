@@ -182,6 +182,29 @@ The concurrency tests run against whatever `MONGODB_URI` points at and skip them
 |---|---|---|---|
 | `VITE_API_URL` | no | `http://localhost:3001/api` | Backend base URL. A trailing `/api` is optional; the socket client strips it. |
 
+## Deployment
+
+The repository is a monorepo with no application at its root, so a platform that
+autodetects the build from the repository root finds nothing to build. Two files
+at the root make the backend deployable without any per-service dashboard
+configuration:
+
+- `package.json` — the only thing it does is delegate: `build` runs
+  `npm ci --include=dev && npm run build` inside `backend/`, which gives the
+  language detector something to recognise and forces the TypeScript devDependency
+  to install even when `NODE_ENV=production` would otherwise skip it.
+- `railway.json` — pins the start command to `node backend/server.js` (one process,
+  so `SIGTERM` reaches the graceful-shutdown handler directly instead of passing
+  through two `npm` wrappers), points the health check at `/health`, and limits
+  rebuild triggers to `backend/**` so frontend commits do not redeploy the API.
+
+`/health` answers `200` while Mongo is still connecting, reporting
+`"status": "degraded"`, so a slow first database connection does not fail the
+platform's health check and roll the deploy back.
+
+The frontend deploys separately from `frontend/` on Vercel and is unaffected by
+either file.
+
 ## API
 
 All REST routes are mounted under `/api` and return JSON. Errors use `{ "error": "message" }`.
