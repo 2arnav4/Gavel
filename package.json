@@ -1,0 +1,13 @@
+{
+  "name": "gavel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Monorepo root. Railway deploys the backend service from here; the frontend deploys separately on Vercel.",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "build": "cd backend && npm ci --include=dev && npm run build",
+    "start": "cd backend && npm start"
+  }
+}
