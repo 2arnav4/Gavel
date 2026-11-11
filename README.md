@@ -40,7 +40,9 @@ Roles are per-room, not global: whoever creates a room is that room's host, and 
 - **Bidder budgets** — every bidder starts with the same purse, set when the room is created. A bid cannot exceed what is left, and the winner is debited only when the sale is final, so the auction is a contest of allocation rather than of who types the biggest number.
 - **Atomic concurrent bidding** — simultaneous bids are resolved by a single conditional MongoDB update, so exactly one can win.
 - **Anti-snipe countdown** — an accepted bid restarts the item's countdown, so a last-second bid cannot win uncontested.
-- **Server-owned timers** — deadlines are stored as absolute timestamps and rebuilt on boot, so a restart mid-auction resumes rather than resets.
+- **Server-owned timers** — deadlines are stored as absolute timestamps and rebuilt on boot, so a restart mid-auction resumes rather than resets. A one-second database sweep resolves any item whose timer was lost.
+- **Ordered, resumable events** — every item event carries a version, so a client drops late duplicates and resyncs when it detects a gap.
+- **Safe retries** — a bid names its item and carries a client id, so a bid queued across a reconnect cannot land on the next item, and a retried bid is never counted twice.
 - **Presence** — live online/offline indicators, with stale flags cleared on startup.
 - **Pause and resume** — the host can freeze the countdown mid-item; bidding closes at the database while paused and the clock restarts from the exact remainder.
 - **Resolution** — the host can sell or mark unsold at any time; otherwise the timer resolves the item automatically.
@@ -158,7 +160,7 @@ cd backend  && npm run lint && npm test    # typecheck, unit + concurrency tests
 cd frontend && npm run lint && npm run build
 ```
 
-The concurrency tests run against whatever `MONGODB_URI` points at and skip themselves if no database is reachable, so `npm test` passes either way.
+The database tests run against a local MongoDB only (`MONGODB_URI` or `TEST_MONGODB_URI`, on localhost), in a separate `gavel_test` database. They refuse to start against a remote URI, and skip themselves if no local database is reachable. The multi-instance tests also need a local Redis, and skip without one.
 
 ## Environment Variables
 
@@ -175,6 +177,16 @@ The concurrency tests run against whatever `MONGODB_URI` points at and skip them
 | `DEFAULT_STARTING_BUDGET` | no | `100000` | Purse each bidder starts with when a room does not specify one. |
 | `DEFAULT_MIN_BID_INCREMENT` | no | `500` | Smallest legal raise over the standing bid when a room does not specify one. |
 | `JWT_SECRET` | **yes in production** | dev-only fallback | Signing key. Startup fails if unset when `NODE_ENV=production`. |
+| `REDIS_URL` | no | unset | **Off by default and not set in production.** When set, broadcasts, presence and rate limits are shared across instances through Redis. When unset, or when Redis is unreachable at startup, the server runs as a single instance. See [SCALING.md](SCALING.md). |
+
+**Test-only variables** (read by `npm test`, never by the server)
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TEST_MONGODB_URI` | `MONGODB_URI` | Database for the test suite. Must be on `localhost`, `127.0.0.1` or `::1`; the suite refuses to run against anything else. |
+| `TEST_MONGODB_DB_NAME` | `gavel_test` | Database name for test fixtures, kept apart from the app's own. |
+| `ALLOW_REMOTE_TEST_DB` | unset | Set to `true` to deliberately run the tests against a non-local database. |
+| `TEST_REDIS_URL` | `redis://127.0.0.1:6379` | Local Redis for the multi-instance tests. They skip themselves if it is unreachable. |
 
 **`frontend/.env`**
 
@@ -254,10 +266,10 @@ To see the concurrency handling directly, open two bidder windows and submit the
 
 ## Known Limitations
 
-- **Single instance only.** Countdown timers live in an in-memory `Map` keyed by room id. Running two backend instances behind a load balancer would fragment that map, and Socket.IO broadcasts would not reach clients on the other instance. Horizontal scaling needs the Redis adapter plus a shared scheduler. This is the most significant limitation.
+- **Single instance in production.** Running more than one instance is supported in code: a database expiry sweep backs up the in-memory timers, and the Redis adapter, shared presence and shared rate limits switch on with `REDIS_URL`. It is not enabled, because Redis and a second instance cost money that one instance does not yet justify. Two instances would also need sticky sessions, and the startup presence reset briefly marks other instances' users offline. See [SCALING.md](SCALING.md).
 - **Cold starts.** The free Render tier sleeps when idle; the first request can take up to a minute.
 - **Room reads are deliberately public.** Anyone holding a room code can call `GET /api/rooms/:code` and `/results`. The code is the invitation, and requiring an account to view a shared link would defeat that. Neither route returns a session token, so a code grants visibility and never control. Every write is authorized.
-- **Rate limiting is per-process.** Login and registration share a fixed window per IP, and `bid:place` is capped per participant per second. Both counters live in a `Map` inside the one Node process, so a second instance would double the effective budget, and a restart hands everyone a fresh window.
+- **Rate limiting is per-process unless Redis is enabled.** Login and registration share a fixed window per IP, and `bid:place` is capped per participant per second. Without `REDIS_URL` both counters live in the one Node process, so a restart hands everyone a fresh window.
 - **Unbounded anti-snipe.** Every accepted bid restores the full countdown, so two determined bidders can keep an item open indefinitely — though the minimum raise means the price climbs every time they do, so it terminates once someone's purse runs out. A production auction would also cap total duration or reset to a shorter window.
 - **Flat bid increment.** The minimum raise is a single figure per room. Real auctions use a tiered ladder that widens as the price climbs, so a ₹500 step is not still in force at ₹40,00,000.
 - **Input is validated by hand, on purpose.** Every field is type-checked at the boundary it arrives through, REST and socket alike, but there is no schema library. A second declarative idiom alongside the existing tested guards would make the codebase harder to reason about, not easier, so adding one was considered and rejected. The cost is that the rules live in code rather than in one place.
@@ -270,8 +282,8 @@ To see the concurrency handling directly, open two bidder windows and submit the
 
 ## Future Improvements
 
-- Redis adapter and a distributed scheduler for multi-instance deployment — see [SCALING.md](SCALING.md) for the ordering and what breaks first.
-- Idempotency keys on `bid:place`, so a client retrying after a reconnect cannot double-bid.
+- Enable the built multi-instance mode (Redis plus a second instance) once one instance is saturated — see [SCALING.md](SCALING.md) for the ordering and what breaks first.
+- Fix the startup presence reset so it only clears this instance's own sockets.
 - Team squads and per-category caps on top of the existing per-bidder budget.
 - Bounded anti-snipe: cap total extensions, or reset to a shorter window than the opening one.
 - Spectator (read-only) role.

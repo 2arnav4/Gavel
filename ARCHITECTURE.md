@@ -36,8 +36,9 @@ flowchart TD
 1. **React Frontend**: Built with React 19, Vite, Tailwind CSS, and Zustand. State is synced dynamically via Socket.IO, but auth/login and initialization happen via REST API calls. Zustand is used purely for lightweight client-side convenience (e.g., maintaining the session room token).
 2. **Express API**: Handles user authentication (JWT-based), creating/joining rooms, retrieving room summaries, and catalog initialization.
 3. **Socket.IO Server**: Manages full-duplex realtime connections, participant presence (joined/left indicators), live bid submissions, and live active item status updates.
-4. **In-Memory Room Timers**: The server schedules and tracks active-item countdowns in memory. When a timer expires, the server automatically resolves the item status.
+4. **Room Timers**: Each instance keeps an in-memory `setTimeout` per live room as the fast path, and also runs a one-second sweep over MongoDB for active items whose deadline has passed. The sweep is the backstop: an item resolves even if the instance holding its timer died.
 5. **MongoDB**: The single source of truth for all database collections (Rooms, Participants, AuctionItems, Bids).
+6. **Optional Redis (off by default)**: With `REDIS_URL` set, broadcasts, presence and rate-limit counters are shared across instances. Without it the server behaves exactly as a single process, and MongoDB stays the only source of truth either way.
 
 ---
 
@@ -56,17 +57,17 @@ Socket connections are room-scoped. The client sends a per-room `sessionToken` d
 | `item:added` | Server → Client | `{ item }` | Emitted from the REST item handler so lobby catalogs update without a refetch. |
 | `auction:start` | Client → Server | *None* | Host only. Moves the room from `lobby` to `live`. |
 | `auction:started` | Server → Client | `{ room }` | Tells every client to move from the lobby to the auction board. |
-| `item:activated` | Server → Client | `{ item, startedAt, endsAt }` | The new active item plus the server's clock at activation and the absolute deadline. |
+| `item:activated` | Server → Client | `{ item, startedAt, endsAt, version }` | The new active item plus the server's clock at activation and the absolute deadline. `version` starts the item's event sequence (see Concurrency §14). |
 | `auction:pause` | Client → Server | *None* | Host only. Freezes the countdown on the active item. |
-| `auction:paused` | Server → Client | `{ itemId, remainingMs }` | Broadcast when the clock stops. `remainingMs` is what the client renders in place of a live countdown. |
+| `auction:paused` | Server → Client | `{ itemId, remainingMs, version }` | Broadcast when the clock stops. `remainingMs` is what the client renders in place of a live countdown. |
 | `auction:resume` | Client → Server | *None* | Host only. Restarts the countdown from where it stopped. |
-| `auction:resumed` | Server → Client | `{ item, endsAt, serverTime }` | Broadcast with the new absolute deadline and the server clock for offset correction. |
-| `bid:place` | Client → Server | `{ amount: number }` | Bidders only. Hosts are rejected. The payload is read defensively: a non-object payload yields `undefined` rather than throwing. |
-| `bid:accepted` | Server → Client | `{ bid, item }` | Broadcast to the room. `item` carries the new highest bid and the extended `endsAt`. |
-| `bid:rejected` | Server → Client | `{ reason: string, minimumBid?: number, retryAfterMs?: number }` | Sent only to the submitting socket. `minimumBid` is present only when the server actually read the active item; it is omitted rather than invented on paths that rejected earlier. `retryAfterMs` appears only on throttled bids. |
+| `auction:resumed` | Server → Client | `{ item, endsAt, serverTime, version }` | Broadcast with the new absolute deadline and the server clock for offset correction. |
+| `bid:place` | Client → Server | `{ amount: number, itemId?: string, bidId?: string }` | Bidders only. Hosts are rejected. The payload is read defensively: a non-object payload yields `undefined` rather than throwing. `itemId` names the item the bidder was looking at; a mismatch is rejected as `STALE_ITEM`. `bidId` is a client-generated id (8–64 letters, digits or dashes) that makes a retry idempotent. Both are optional, so older clients keep working. |
+| `bid:accepted` | Server → Client | `{ bid, item, version, duplicate? }` | Broadcast to the room. `item` carries the new highest bid and the extended `endsAt`. A retried `bidId` is answered to the sender only, with `duplicate: true` and no `version`. |
+| `bid:rejected` | Server → Client | `{ reason: string, minimumBid?: number, retryAfterMs?: number }` | Sent only to the submitting socket. `minimumBid` is present only when the server actually read the active item; it is omitted rather than invented on paths that rejected earlier. `retryAfterMs` appears only on throttled bids. A `code` field (for example `BID_TOO_LOW`, `STALE_ITEM`, `RATE_LIMITED`) identifies the reason by machine. |
 | `item:sell` | Client → Server | *None* | Host only. Requires at least one accepted bid. |
 | `item:unsold` | Client → Server | *None* | Host only. Clears any recorded highest bidder. |
-| `item:ended` | Server → Client | `{ item, resolution: "sold" \| "unsold", winner }` | The item was resolved, by the host or by expiry. `winner` is the debited participant on a sale, `null` otherwise. |
+| `item:ended` | Server → Client | `{ item, resolution: "sold" \| "unsold", winner, version }` | The item was resolved, by the host or by expiry. `winner` is the debited participant on a sale, `null` otherwise. |
 | `auction:completed` | Server → Client | `{ room }` | No pending items remain; clients redirect to results. |
 | `error` | Server → Client | `{ message: string }` | Sent only to the offending socket for authorization and lifecycle failures. |
 
@@ -163,6 +164,8 @@ for (const room of liveRooms) {
 
 A deadline already in the past yields a zero delay, so the item resolves immediately on startup rather than hanging.
 
+Restoration only runs at boot, so on its own it cannot rescue an item whose timer lived on an instance that has since died. Every instance therefore also runs `startExpirySweep()`: once a second it queries `{ status: "active", isPaused: false, endsAt: { $lte: now } }` (served by the `{ status, endsAt }` index) and hands each match to the same `expireActiveItem()` the timer uses. Because the expiry is a conditional claim, a sweep, a timer and another instance's sweep can all fire for the same item and exactly one resolves it. The cost is one indexed query per instance per second; the worst case is an item resolving up to a second late when its timer was lost. The sweep skips ticks while MongoDB is disconnected and is stopped first during graceful shutdown.
+
 ### 4. Pausing Without Losing the Deadline
 
 The countdown is an absolute timestamp, not a ticking counter, so pausing cannot simply "stop the clock" — there is no clock to stop. Instead the pause converts the deadline back into a duration:
@@ -209,6 +212,10 @@ The grace period exists because the common failure is not a clean close. A wifi 
 
 A restart loses the tracker but not the flag, which would leave every previous bidder shown as permanently online. Startup therefore clears all `isConnected` flags before restoring timers; live clients re-register on their next `room:connect`.
 
+The tracker sits behind a `PresenceStore` interface (`realtime/presenceStore.ts`). The default is the in-memory tracker above. With Redis enabled, each participant is a hash of socket id → expiry timestamp, attach/detach/count run as Lua scripts so "was this the first socket?" is decided atomically, and each instance refreshes its own sockets every 10 seconds. A crashed instance's entries simply stop counting after 30 seconds, rather than keeping someone online forever. If Redis is unreachable, the store answers from this instance's local view.
+
+**Known gap, multi-instance only:** the startup reset above clears `isConnected` for *every* participant, including people connected to other, healthy instances. They are shown offline until their next reconnect. It is left in place because removing it would reintroduce the permanently-online problem on a single instance, which is the deployment that actually runs.
+
 ### 7. The Socket Handshake Is an Untrusted Boundary
 `socket.handshake.auth` is client-controlled JSON, and the two fields read from it — `sessionToken` and `roomCode` — reach a Mongoose query and a string method respectively. Neither is typed by the transport.
 
@@ -232,6 +239,50 @@ Where instant revocation is actually needed — a leaked token, a compromised de
 An accepted bid performs the atomic claim on the item, then saves a `Bid` document as a separate write. There is no transaction. If the second write fails, the item still carries the correct `currentBid` and `highestBidderId` — the auction stays correct, because the item is the source of truth for price — but the append-only log is missing an entry.
 
 This is a deliberate trade. A multi-document transaction on the hot path costs more than the invariant is worth, and the failure mode degrades an audit log rather than the auction itself.
+
+The item `version` increment (§14) rides inside the claim itself, so it adds no write.
+
+### 14. Event Sequence: a Version per Item
+Broadcasts are not guaranteed to arrive in commit order: two bids accepted a millisecond apart can be emitted in either order, and a client that reconnects has simply missed whatever was sent in between. Every update that changes an item's visible state — activation, an accepted bid, pause, resume, resolution, and the restore path — therefore also does `$inc: { version: 1 }` in the same `findOneAndUpdate`, and the resulting number travels on `item:activated`, `bid:accepted`, `auction:paused`, `auction:resumed` and `item:ended`.
+
+The client (`hooks/useSocket.ts`) holds the last version it applied for the current item:
+
+| Incoming event | Client action |
+|---|---|
+| version ≤ held | Ignore. It is a late or duplicate copy of something already applied. |
+| version = held + 1 | Apply and advance. |
+| version > held + 1 | A gap. Ignore it and re-emit `room:connect`, so `room:state` replaces local state with the truth. |
+| a different item id | Same as a gap: resync. |
+| no version (older server) | Apply as before. |
+
+The field is additive. Clients that ignore it behave exactly as they did before.
+
+### 15. Stale and Retried Bids
+Two bid failures used to look like each other and like a low bid. Both are now explicit:
+
+- **Stale item.** `bid:place` may carry `itemId`. If it is not the room's current item, the bid is rejected as `STALE_ITEM` before any claim. Without this, a bid queued during a reconnect could land on whichever item happened to be live by the time it arrived.
+- **Retried bid.** `bid:place` may carry a client-generated `bidId`. The accepted `Bid` log entry stores it, under a unique partial index on `{ participantId, clientBidId }`. A repeat `bidId` with the same amount is answered with the original acceptance (`duplicate: true`, sender only) instead of a second claim or a misleading "too low". A repeat with a different amount is rejected as `INVALID_INPUT`.
+
+The order is unchanged: the claim still runs before the log write. A second claim with the same `bidId` cannot win at the same amount anyway, because the price floor has moved. The unique index stops the log recording a reused id twice. **Admitted gap:** a client that deliberately reuses one `bidId` for two different, concurrent, both-winning amounts gets both claims and only one log entry, because the second write hits the index. The price is still right; that bid is missing from history and a warning is logged. Only a hand-crafted client can cause it, and the only effect is raising its own price.
+
+### 16. Optional Redis Fan-out
+Redis is opt-in and **not enabled in production** (see SCALING.md for why). With `REDIS_URL` unset, nothing below runs and no Redis package is ever connected.
+
+With `REDIS_URL` set, `index.ts` connects before building the Socket.IO server and wires three things, each behind an interface whose default is the in-memory implementation:
+
+| Concern | Interface | Redis implementation | When Redis is unreachable |
+|---|---|---|---|
+| Broadcasts | Socket.IO adapter | `@socket.io/redis-streams-adapter`, `onlyPlaintext: true` | Same-server clients still receive every event; other servers miss events until Redis returns |
+| Rate limits | `RateLimitCheck` | Fixed window in a Lua script (`INCR` + `PEXPIRE` + `PTTL`) | Falls back to this instance's counters |
+| Presence | `PresenceStore` | Hash of socket id → expiry, Lua scripts, 10 s heartbeat | Falls back to this instance's view |
+
+Three details here are not obvious and were each found by testing:
+
+- **`onlyPlaintext: true` is required.** The adapter otherwise msgpack-encodes any payload containing binary, and a Mongoose ObjectId holds a Buffer. Payloads then arrived on the other instance with fields such as `bid.amount` missing. Gavel never sends binary, so the JSON path (which honours `toJSON`) is the correct one.
+- **Publishing fails fast; reading waits.** The cluster adapter delivers to local sockets only after the Redis publish resolves. node-redis queues commands while it reconnects, so during an outage local delivery would stall until Redis returned. Disabling the queue outright is worse: the adapter's read loop retries a failed `XREAD` with no backoff, and an instantly failing read spins the event loop. `failFastPublisher()` therefore rejects only `xAdd` while the client is not ready, and leaves the polling connections on the default queue.
+- **Startup does not depend on Redis.** If it is unreachable within 5 seconds, the server logs the fact and runs in single-instance mode.
+
+Sticky sessions are still required across instances for the HTTP long-polling transport.
 
 ### 11. Health Reports 200 While Degraded
 `GET /health` returns HTTP 200 even when MongoDB is disconnected, with `status: "degraded"` and `ready: false` in the body. A transient database blip should not cause the platform to kill an otherwise healthy process, so readiness is expressed in the payload rather than the status code. Callers that care must read `ready`, not the status line.
@@ -293,6 +344,8 @@ MongoDB is treated as a runtime dependency, not a startup precondition. The HTTP
 ```
 
 - **Unique constraints**: `participants` carries a compound unique index on `{ roomId, usernameNormalized }`, enforcing unique names within a room while allowing the same name across rooms. The application also pre-checks for a taken name, but that check is a read-then-write race; the index is the real guard and its duplicate-key error is translated back into the same message.
-- **Supporting indexes**: `{ itemId, createdAt }` on `bids` for the newest-first log, and `{ roomId, status, createdAt }` on `auctionitems` for the catalog listing and the conditional claim of the next pending item.
+- **Supporting indexes**: `{ itemId, createdAt }` on `bids` for the newest-first log, `{ roomId, status, createdAt }` on `auctionitems` for the catalog listing and the conditional claim of the next pending item, and `{ status, endsAt }` on `auctionitems` for the expiry sweep.
+- **Idempotency index**: `{ participantId, clientBidId }` on `bids`, unique, partial on `clientBidId` being a string, so bids without a `bidId` are unaffected.
+- **Item version**: `auctionitems.version` (number, default 0) is the per-item event sequence. Documents created before it existed start counting from 1 on their next change.
 - **Session security**: The host/bidder role is assigned server-side at room creation or join and bound to a random `sessionToken`, which must match a participant record during the socket handshake. The token is stripped from every participant list sent to clients.
 - **Two identity layers**: the JWT cookie identifies the account across the app; the `sessionToken` identifies membership and role inside one room. They are deliberately separate so one account can host one room and bid in another.

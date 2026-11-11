@@ -96,3 +96,39 @@ Everything inside a room — adding items, starting the auction, bidding, resolv
 ### Trade-off
 - **Scaling Limit:** This design requires the WebSocket server to be single-instance. If we scale horizontally behind a load balancer, client connections would be split across instances, and the timer Map would be fragmented (e.g. Instance A would not be able to clear or modify a timer scheduled on Instance B).
 - **Mitigation/Path Forward:** For high-throughput scaling, we would introduce a Redis-backed Adapter for Socket.IO events and move timer management to a distributed job scheduler (such as BullMQ) backed by Redis. However, for a single-node deployment, in-memory timers are extremely lightweight, zero-dependency, and offer microsecond performance.
+- **Superseded in part by §7:** the in-memory timers stay as the fast path, but a database sweep now backs them up, and BullMQ was rejected.
+
+---
+
+## 7. Multi-Instance Realtime: MongoDB Stays Authoritative, Redis Is Optional Fan-out
+
+**Date:** 2026-11-11
+
+### Context
+Timers, presence, rate limits and Socket.IO broadcasts all lived in one process. A second instance would split every broadcast and every presence count, multiply the rate limits, and leave item expiry depending on the instance that held the timer staying alive. Separately, on one instance: events carried no ordering, so a client could not tell it had missed or reordered one; `bid:place` carried no item id, so a bid buffered across a reconnect could land on the next item; and a retried bid was either re-claimed or wrongly told it was too low.
+
+### Options
+1. **Keep the MongoDB claim; BullMQ delayed jobs for timers; Redis for presence, rate limits and the Socket.IO adapter.** Rejected for the timer part. Deadlines are already durable in MongoDB and the expiry claim is already idempotent, so BullMQ would make Redis a hard dependency for items ever ending, and add a second place a timer can be lost.
+2. **Redis as the bid authority (a Lua script claims the bid; MongoDB written behind).** Rejected. It creates a second source of truth, and a crash between the two writes needs a replay log to recover. That latency win is not needed at this scale.
+3. **A single-writer queue per room.** Rejected. It adds a hop to every bid, and it replaces an atomic database guarantee with an ordering assumption.
+4. **Keep the MongoDB claim; expire items from the database on every instance; use Redis only for fan-out, presence and rate limits, opt-in; add an event version and optional `itemId` and `bidId` to bids.** Chosen.
+
+### Chosen
+Option 4, as built:
+- A one-second sweep for expired active items runs on every instance, using the existing idempotent expiry. The in-process timer remains the fast path.
+- A per-item `version`, incremented inside the same update as each state change, is sent on every item event. The client ignores stale events and resyncs on a gap.
+- `bid:place` accepts optional `itemId` (mismatch → `STALE_ITEM`) and `bidId` (a retry is replayed, under a unique partial index).
+- Redis Streams adapter, a shared presence store and shared rate limits, each behind an interface with an in-memory default. All of it is off unless `REDIS_URL` is set.
+
+**Not enabled in production.** Running it means paying for a Redis service and a second instance, for capacity one instance does not yet need. See SCALING.md for the estimate.
+
+### Trade-off
+- One indexed query per instance per second for the sweep, and up to a second of extra expiry latency when a timer has been lost.
+- One extra indexed read per bid for the `bidId` lookup.
+- With Redis enabled and then lost: other instances miss events until it returns, and limits and presence degrade to per-instance.
+- New dependencies, opt-in only: `redis` 6.3.0 (node-redis, maintained by Redis), `@socket.io/redis-streams-adapter` 0.3.1 (maintained by the Socket.IO team). Both are pinned exactly.
+
+### Revisit if
+- Measured bid latency at the claim becomes the bottleneck. Then reconsider option 2.
+- More than one item is live at a time. Budgets then need reserving at bid time.
+- Two instances are actually deployed. Then fix the startup presence reset first.
