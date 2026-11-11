@@ -137,3 +137,36 @@ anything is added.
 3. Trim the remaining reads on the bid path.
 4. Only once one instance is genuinely saturated: add a Redis service, set `REDIS_URL`, run two instances behind a load balancer with sticky sessions. No code change is required.
 5. Then fix the startup presence reset (section 2.2) before relying on the online indicators.
+
+---
+
+## 6. Measured on one instance (11 Nov 2026)
+
+One Node process, local MongoDB, no Redis, production mode, one room, every
+bidder bidding roughly once every 12 seconds for 30 seconds. Load generated
+with k6 on the same 8-core, 8 GB laptop, so these are relative numbers, not a
+capacity claim for the hosted deployment.
+
+| Sockets in one room | Joined | Bids sent | Accepted | `bid:place` to `bid:accepted` p50 / p95 / p99 | Peak memory | All clients agreed on the final price |
+|---|---|---|---|---|---|---|
+| 1,000 | 1,000 | 2,488 | 61% | 10 / 32 / 54 ms | 231 MB | yes |
+| 2,000 | 2,000 | 5,006 | 8% | 131 / 441 / 752 ms | 314 MB | yes |
+| 5,000 | did not complete | none | n/a | n/a | 439 MB | n/a |
+
+What this says:
+
+- **The bid claim is not the limit.** Every bid was answered at every size that
+  completed, and the stored data passed the invariant audit after each run.
+- **Fan-out is.** At 2,000 sockets most bids are rejected as too low because
+  the price a client sees is already stale by the time its bid arrives.
+- **Joining is the first hard limit.** `room:state` carries the whole roster,
+  so its size grows with the room (241 kB at 1,000 participants, 1.2 MB at
+  5,000) and the total sent while a room fills grows with the square of it
+  (about 6 GB for 5,000 joiners). Each join also broadcasts `participant:joined`
+  to everyone already there (500,000 messages while 1,000 people join). A room
+  of 5,000 does not finish joining.
+
+The fix for the last point is a payload change, not infrastructure: send a
+participant count and the first page of the roster in `room:state`, fetch the
+rest on demand, and batch presence updates. That changes what the client
+receives, so it is a decision, not a patch.
