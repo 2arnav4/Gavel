@@ -301,3 +301,31 @@ test("the sixth login attempt in a window is rate limited with Retry-After", asy
   assert.deepEqual(statuses.slice(0, 5), [401, 401, 401, 401, 401]);
   assert.equal(statuses[5], 429);
 });
+
+test("an unknown route is a JSON 404, not an HTML page", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  for (const path of ["/nope", "/../.env", "/rooms/ABCDEF/nothing"]) {
+    const response = await fetch(`${baseUrl}${path}`);
+    assert.equal(response.status, 404, path);
+    assert.match(response.headers.get("content-type") ?? "", /application\/json/, path);
+    assert.equal(typeof ((await response.json()) as Json).error, "string", path);
+  }
+
+  const wrongMethod = await fetch(`${baseUrl}/auth/login`, { method: "PUT" });
+  assert.equal(wrongMethod.status, 404);
+  assert.match(wrongMethod.headers.get("content-type") ?? "", /application\/json/);
+});
+
+test("a request from an origin that is not allowed is a 403, not a 500", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const refused = await fetch(`${baseUrl}/rooms/ABCDEF`, { headers: { Origin: "https://evil.example" } });
+  assert.equal(refused.status, 403);
+  assert.equal(refused.headers.get("access-control-allow-origin"), null);
+  assert.equal(typeof ((await refused.json()) as Json).error, "string");
+
+  const allowed = await fetch(`${baseUrl}/rooms/ABCDEF`, { headers: { Origin: "http://localhost:5173" } });
+  assert.equal(allowed.status, 404);
+  assert.equal(allowed.headers.get("access-control-allow-origin"), "http://localhost:5173");
+});

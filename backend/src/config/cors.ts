@@ -1,5 +1,6 @@
 import type { CorsOptions } from "cors";
 import { env } from "./env.js";
+import { AppError } from "../middleware/errorHandler.js";
 
 const VERCEL_PREVIEW = /^https:\/\/gavel-[a-z0-9-]+\.vercel\.app$/;
 
@@ -21,7 +22,7 @@ export const corsOptions: CorsOptions = {
       return callback(null, true);
     }
 
-    callback(new Error("Not allowed by CORS"));
+    callback(new AppError("This origin is not allowed.", 403));
   },
   credentials: true,
 };
