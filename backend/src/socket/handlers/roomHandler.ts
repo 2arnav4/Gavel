@@ -1,7 +1,7 @@
 import type { Server, Socket } from "socket.io";
 import { Participant } from "../../models/participantModel.js";
 import { AuctionItem } from "../../models/itemModel.js";
-import { Bid, type IBid } from "../../models/bidModel.js";
+import { Bid } from "../../models/bidModel.js";
 import { Room } from "../../models/roomModel.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
@@ -64,20 +64,20 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
         await Participant.updateOne({ _id: participant._id }, { $set: { isConnected: true } });
       }
 
-      const participants = await Participant.find({ roomId: room._id }).select(
-        "-sessionToken"
-      );
+      const participants = await Participant.find({ roomId: room._id })
+        .select("-sessionToken")
+        .lean();
 
       let activeItem = null;
-      let bids: IBid[] = [];
+      let bids: unknown[] = [];
       if (room.status === "live" && room.currentItemId) {
         activeItem = await AuctionItem.findById(room.currentItemId);
         if (activeItem) {
-          bids = await Bid.find({ itemId: activeItem._id }).sort({ createdAt: -1 });
+          bids = await Bid.find({ itemId: activeItem._id }).sort({ createdAt: -1 }).lean();
         }
       }
 
-      const items = await AuctionItem.find({ roomId: room._id }).sort({ createdAt: 1 });
+      const items = await AuctionItem.find({ roomId: room._id }).sort({ createdAt: 1 }).lean();
 
       socket.emit("room:state", {
         room,
