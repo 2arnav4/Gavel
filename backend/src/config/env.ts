@@ -55,6 +55,7 @@ export const env = {
   ),
   presenceGraceMs: getPositiveInteger("PRESENCE_GRACE_MS", "10000"),
   allowPreviewOrigins: getEnv("ALLOW_PREVIEW_ORIGINS", "false") === "true",
+  redisUrl: process.env.REDIS_URL?.trim() || null,
   jwtSecret:
     process.env.JWT_SECRET ??
     (nodeEnv === "production"

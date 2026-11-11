@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import test, { after, before } from "node:test";
 import mongoose from "mongoose";
 import type { Socket as ClientSocket } from "socket.io-client";
-import { env } from "../config/env.js";
+import { connectTestDatabase } from "../utils/testDatabase.js";
 import { AuctionItem } from "../models/itemModel.js";
 import { Bid } from "../models/bidModel.js";
 import { Participant } from "../models/participantModel.js";
@@ -48,16 +48,8 @@ async function createBidder(username: string, budget = BIDDER_BUDGET): Promise<s
 }
 
 before(async () => {
-  try {
-    await mongoose.connect(env.mongodbUri, {
-      serverSelectionTimeoutMS: 5_000,
-      dbName: env.mongodbDbName,
-    });
-    dbAvailable = true;
-  } catch {
-    dbAvailable = false;
-    return;
-  }
+  dbAvailable = await connectTestDatabase();
+  if (!dbAvailable) return;
 
   harness = await startHarness();
 
@@ -293,20 +285,50 @@ test("after an accepted bid the minimum moves by the room increment", async (t) 
 
 const GRACE_MS = Number(process.env.PRESENCE_GRACE_MS ?? 10_000);
 
-function neverEvent(socket: ClientSocket, event: string, withinMs: number): Promise<boolean> {
+function neverEvent<T = unknown>(
+  socket: ClientSocket,
+  event: string,
+  withinMs: number,
+  matches: (payload: T) => boolean = () => true,
+): Promise<boolean> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       socket.off(event, onEvent);
       resolve(true);
     }, withinMs);
 
-    function onEvent(): void {
+    function onEvent(payload: T): void {
+      if (!matches(payload)) return;
       clearTimeout(timer);
       socket.off(event, onEvent);
       resolve(false);
     }
 
-    socket.once(event, onEvent);
+    socket.on(event, onEvent);
+  });
+}
+
+type DeparturePayload = { participant: { username: string; isConnected: boolean } };
+
+function departureOf(username: string) {
+  return (payload: DeparturePayload) => payload?.participant?.username === username;
+}
+
+function nextDepartureOf(socket: ClientSocket, username: string, timeoutMs: number): Promise<DeparturePayload> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off("participant:left", onEvent);
+      reject(new Error(`Timed out waiting for ${username} to leave`));
+    }, timeoutMs);
+
+    function onEvent(payload: DeparturePayload): void {
+      if (!departureOf(username)(payload)) return;
+      clearTimeout(timer);
+      socket.off("participant:left", onEvent);
+      resolve(payload);
+    }
+
+    socket.on("participant:left", onEvent);
   });
 }
 
@@ -326,7 +348,7 @@ test("a reconnect inside the grace period does not broadcast a departure", async
   bidder.emit("room:connect");
   await nextEvent(bidder, "room:state");
 
-  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3);
+  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3, departureOf("t_bidder"));
   bidder.close();
 
   const rejoined = track(await connect(harness.url, { sessionToken: bidderToken, roomCode }));
@@ -352,11 +374,7 @@ test("a participant who does not return is marked offline after the grace period
   leaver.emit("room:connect");
   await nextEvent(leaver, "room:state");
 
-  const departure = nextEvent<{ participant: { username: string; isConnected: boolean } }>(
-    observer,
-    "participant:left",
-    GRACE_MS * 5 + 2_000,
-  );
+  const departure = nextDepartureOf(observer, "t_poor", GRACE_MS * 5 + 2_000);
   leaver.close();
 
   const { participant } = await departure;
@@ -383,7 +401,7 @@ test("a second tab closing leaves the participant online immediately", async (t)
   tabTwo.emit("room:connect");
   await nextEvent(tabTwo, "room:state");
 
-  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3);
+  const noDeparture = neverEvent(observer, "participant:left", GRACE_MS * 3, departureOf("t_bidder"));
   tabTwo.close();
 
   assert.equal(await noDeparture, true);
@@ -573,5 +591,176 @@ test("a losing bid reads the item exactly once, after the claim", async (t) => {
   });
 
   assert.equal(reads, 1, "a losing bid must read the item once, not twice");
+  socket.close();
+});
+
+async function liveItemState() {
+  const live = await AuctionItem.findOne({ roomId, status: "active" });
+  assert.ok(live, "precondition: an active item exists");
+  const winningAmount = live!.currentBid > 0 ? live!.currentBid + MIN_INCREMENT : live!.startingBid;
+  return { live: live!, winningAmount };
+}
+
+test("a bid naming an item that is no longer on the block is rejected without a claim", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_stale");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  const { live, winningAmount } = await liveItemState();
+  const bidsBefore = await Bid.countDocuments({ roomId });
+
+  const rejected = nextEvent<BidRejection>(socket, "bid:rejected");
+  socket.emit("bid:place", { amount: winningAmount, itemId: new mongoose.Types.ObjectId().toString() });
+  const rejection = await rejected;
+
+  assert.equal(rejection.code, "STALE_ITEM");
+  assert.equal(await Bid.countDocuments({ roomId }), bidsBefore, "a stale bid must not be logged");
+  assert.equal((await AuctionItem.findById(live._id))?.currentBid, live.currentBid, "a stale bid must not move the price");
+  socket.close();
+});
+
+test("a non-string item id is rejected as invalid input", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_badid");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  const { winningAmount } = await liveItemState();
+
+  const rejected = nextEvent<BidRejection>(socket, "bid:rejected");
+  socket.emit("bid:place", { amount: winningAmount, itemId: { $ne: null } });
+  assert.equal((await rejected).code, "INVALID_INPUT");
+  socket.close();
+});
+
+test("a bid naming the current item is accepted as before", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_current");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  socket.emit("room:connect");
+  await nextEvent(socket, "room:state");
+  const { live, winningAmount } = await liveItemState();
+
+  const accepted = nextEvent<{ bid: { amount: number } }>(socket, "bid:accepted");
+  socket.emit("bid:place", { amount: winningAmount, itemId: live._id.toString() });
+  assert.equal((await accepted).bid.amount, winningAmount);
+  socket.close();
+});
+
+test("a retried bid id is replayed to the sender, not claimed or rejected as too low", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_retry");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  socket.emit("room:connect");
+  await nextEvent(socket, "room:state");
+  const { live, winningAmount } = await liveItemState();
+  const bidId = crypto.randomUUID();
+
+  const first = nextEvent<{ duplicate?: boolean }>(socket, "bid:accepted");
+  socket.emit("bid:place", { amount: winningAmount, itemId: live._id.toString(), bidId });
+  assert.equal((await first).duplicate, undefined, "the first attempt is a normal acceptance");
+
+  const replay = nextEvent<{ duplicate?: boolean; bid: { amount: number } }>(socket, "bid:accepted");
+  socket.emit("bid:place", { amount: winningAmount, itemId: live._id.toString(), bidId });
+  const replayed = await replay;
+
+  assert.equal(replayed.duplicate, true);
+  assert.equal(replayed.bid.amount, winningAmount);
+  assert.equal(await Bid.countDocuments({ clientBidId: bidId }), 1, "a retried bid must be logged once");
+  assert.equal((await AuctionItem.findById(live._id))?.currentBid, winningAmount, "a retry must not move the price");
+  socket.close();
+});
+
+test("a bid id reused for a different amount is rejected", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_reuse");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  socket.emit("room:connect");
+  await nextEvent(socket, "room:state");
+  const { live, winningAmount } = await liveItemState();
+  const bidId = crypto.randomUUID();
+
+  const first = nextEvent(socket, "bid:accepted");
+  socket.emit("bid:place", { amount: winningAmount, itemId: live._id.toString(), bidId });
+  await first;
+
+  const rejected = nextEvent<BidRejection>(socket, "bid:rejected");
+  socket.emit("bid:place", { amount: winningAmount + MIN_INCREMENT, itemId: live._id.toString(), bidId });
+  assert.equal((await rejected).code, "INVALID_INPUT");
+  assert.equal((await AuctionItem.findById(live._id))?.currentBid, winningAmount);
+  socket.close();
+});
+
+test("concurrent accepted bids carry strictly increasing item versions", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const observer = track(await connect(harness.url, { sessionToken: hostToken, roomCode }));
+  observer.emit("room:connect");
+  await nextEvent(observer, "room:state");
+
+  const bidders: ClientSocket[] = [];
+  for (let index = 0; index < 6; index += 1) {
+    const socket = track(await connect(harness.url, { sessionToken: await createBidder(`t_seq${index}`), roomCode }));
+    socket.emit("room:connect");
+    await nextEvent(socket, "room:state");
+    bidders.push(socket);
+  }
+
+  const outcomeOf = (socket: ClientSocket, index: number) => new Promise<void>((resolve) => {
+    const finish = () => {
+      socket.off("bid:accepted", onAccepted);
+      socket.off("bid:rejected", finish);
+      resolve();
+    };
+    const onAccepted = (payload: { bid: { username: string } }) => {
+      if (payload.bid.username === `t_seq${index}`) finish();
+    };
+    socket.on("bid:accepted", onAccepted);
+    socket.on("bid:rejected", finish);
+  });
+
+  const { live, winningAmount } = await liveItemState();
+  const seen: Array<{ amount: number; version: number }> = [];
+  const onAccepted = (payload: { bid: { amount: number }; version: number }) => {
+    seen.push({ amount: payload.bid.amount, version: payload.version });
+  };
+  observer.on("bid:accepted", onAccepted);
+
+  const outcomes = bidders.map(outcomeOf);
+  bidders.forEach((socket, index) => {
+    socket.emit("bid:place", { amount: winningAmount + index * MIN_INCREMENT, itemId: live._id.toString() });
+  });
+  await Promise.all(outcomes);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  observer.off("bid:accepted", onAccepted);
+
+  assert.ok(seen.length >= 1, "at least one concurrent bid must be accepted");
+  assert.equal(new Set(seen.map((entry) => entry.version)).size, seen.length, "no two accepted bids may share a version");
+  const byAmount = [...seen].sort((a, b) => a.amount - b.amount);
+  for (let index = 1; index < byAmount.length; index += 1) {
+    assert.ok(byAmount[index].version > byAmount[index - 1].version, "a higher accepted bid must carry a higher version");
+  }
+  const stored = await AuctionItem.findById(live._id);
+  assert.equal(stored?.version, Math.max(...seen.map((entry) => entry.version)), "the stored version matches the newest event");
+  assert.equal(stored?.version, (live.version ?? 0) + seen.length, "every accepted bid bumps the version exactly once");
+
+  for (const socket of bidders) socket.close();
+  observer.close();
+});
+
+test("a malformed bid id is rejected before anything is read", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const token = await createBidder("t_badbidid");
+  const socket = track(await connect(harness.url, { sessionToken: token, roomCode }));
+  const { winningAmount } = await liveItemState();
+
+  for (const bidId of ["short", { $ne: null }, "x".repeat(65), "has spaces in it"]) {
+    const rejected = nextEvent<BidRejection>(socket, "bid:rejected");
+    socket.emit("bid:place", { amount: winningAmount, bidId });
+    assert.equal((await rejected).code, "INVALID_INPUT", `bidId ${JSON.stringify(bidId)} must be rejected`);
+  }
   socket.close();
 });

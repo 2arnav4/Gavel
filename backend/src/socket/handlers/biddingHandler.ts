@@ -1,17 +1,57 @@
 import type { Server, Socket } from "socket.io";
 import { AuctionItem, type IAuctionItem } from "../../models/itemModel.js";
-import { Bid } from "../../models/bidModel.js";
+import { Bid, type IBid } from "../../models/bidModel.js";
 import { Participant } from "../../models/participantModel.js";
 import { Room } from "../../models/roomModel.js";
 import { getMinimumBid, isValidPositiveAmount } from "../../utils/auction.js";
 import { env } from "../../config/env.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
 import { createRateLimiter } from "../../utils/rateLimiter.js";
+import type { RateLimitCheck } from "../../realtime/redisRateLimiter.js";
 import { readEventField } from "../validation.js";
 import type { BidRejection } from "../errors.js";
 import { logger } from "../../utils/logger.js";
 
-const bidRateLimiter = createRateLimiter({ limit: 5, windowMs: 1000 });
+export const BID_LIMIT = { limit: 5, windowMs: 1000 };
+
+export const localBidRateLimiter = createRateLimiter(BID_LIMIT);
+
+let bidRateLimiter: RateLimitCheck = localBidRateLimiter;
+
+export function setBidRateLimiter(limiter: RateLimitCheck): void {
+  bidRateLimiter = limiter;
+}
+
+const CLIENT_BID_ID = /^[A-Za-z0-9-]{8,64}$/;
+
+function isDuplicateKeyError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && (error as { code?: unknown }).code === 11000;
+}
+
+async function replayAcceptedBid(
+  socket: Socket,
+  participantId: IBid["participantId"],
+  clientBidId: string,
+  amount: number,
+): Promise<boolean> {
+  const original = await Bid.findOne({ participantId, clientBidId });
+  if (!original) return false;
+
+  if (original.amount !== amount) {
+    socket.emit("bid:rejected", {
+      code: "INVALID_INPUT",
+      reason: "That bid id was already used for a different amount.",
+    } satisfies BidRejection);
+    return true;
+  }
+
+  socket.emit("bid:accepted", {
+    bid: original,
+    item: await AuctionItem.findById(original.itemId),
+    duplicate: true,
+  });
+  return true;
+}
 
 export function registerBiddingHandlers(io: Server, socket: Socket): void {
   socket.on("bid:place", async (data: unknown) => {
@@ -27,7 +67,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         return;
       }
 
-      const bidLimit = bidRateLimiter.check(participant._id.toString());
+      const bidLimit = await bidRateLimiter.check(participant._id.toString());
       if (!bidLimit.allowed) {
         socket.emit("bid:rejected", {
           code: "RATE_LIMITED",
@@ -67,6 +107,24 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
 
       const itemId = room.currentItemId;
 
+      const requestedItemId = readEventField(data, "itemId");
+      if (requestedItemId !== undefined) {
+        if (typeof requestedItemId !== "string") {
+          socket.emit("bid:rejected", {
+            code: "INVALID_INPUT",
+            reason: "Item id must be a string.",
+          } satisfies BidRejection);
+          return;
+        }
+        if (requestedItemId !== itemId.toString()) {
+          socket.emit("bid:rejected", {
+            code: "STALE_ITEM",
+            reason: "That bid was for an item that is no longer on the block.",
+          } satisfies BidRejection);
+          return;
+        }
+      }
+
       let itemLoaded = false;
       let loadedItem: IAuctionItem | null = null;
 
@@ -92,6 +150,20 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
           reason: "Bid amount must be a valid number.",
           minimumBid: await readMinimumBid(),
         } satisfies BidRejection);
+        return;
+      }
+
+      const rawClientBidId = readEventField(data, "bidId");
+      if (rawClientBidId !== undefined && (typeof rawClientBidId !== "string" || !CLIENT_BID_ID.test(rawClientBidId))) {
+        socket.emit("bid:rejected", {
+          code: "INVALID_INPUT",
+          reason: "Bid id must be 8 to 64 letters, digits or dashes.",
+        } satisfies BidRejection);
+        return;
+      }
+      const clientBidId = rawClientBidId as string | undefined;
+
+      if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount)) {
         return;
       }
 
@@ -137,11 +209,16 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
             highestBidderUsername: participant.username,
             endsAt: newEndsAt,
           },
+          $inc: { version: 1 },
         },
         { new: true },
       );
 
       if (!updatedItem) {
+        if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount)) {
+          return;
+        }
+
         const latestItem = await readItem();
 
         if (!latestItem || latestItem.status !== "active") {
@@ -177,8 +254,18 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         participantId: participant._id,
         username: participant.username,
         amount,
+        ...(clientBidId ? { clientBidId } : {}),
       });
-      await newBid.save();
+      try {
+        await newBid.save();
+      } catch (error) {
+        if (!isDuplicateKeyError(error)) throw error;
+        logger.warn("Bid log entry skipped: bid id reused concurrently", {
+          roomCode,
+          participantId: participant._id.toString(),
+          amount,
+        });
+      }
 
       await Room.updateOne(
         { _id: room._id },
@@ -190,6 +277,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       io.to(socketRoomId).emit("bid:accepted", {
         bid: newBid,
         item: updatedItem,
+        version: updatedItem.version,
       });
 
       logger.info("Bid accepted", {

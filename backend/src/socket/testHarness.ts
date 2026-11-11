@@ -2,7 +2,7 @@ import { createServer, type Server as HttpServer } from "http";
 import type { AddressInfo } from "net";
 import type { Server as IoServer } from "socket.io";
 import { io as createClient, type Socket as ClientSocket } from "socket.io-client";
-import { createSocketServer } from "./index.js";
+import { createSocketServer, type SocketServerOptions } from "./index.js";
 
 export type Harness = {
   url: string;
@@ -10,9 +10,9 @@ export type Harness = {
   close: () => Promise<void>;
 };
 
-export async function startHarness(): Promise<Harness> {
+export async function startHarness(options: SocketServerOptions = {}): Promise<Harness> {
   const httpServer: HttpServer = createServer();
-  const io = createSocketServer(httpServer);
+  const io = createSocketServer(httpServer, options);
 
   await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
   const { port } = httpServer.address() as AddressInfo;

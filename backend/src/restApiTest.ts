@@ -5,7 +5,7 @@ import type { AddressInfo } from "node:net";
 import test, { after, before, beforeEach } from "node:test";
 import mongoose from "mongoose";
 import { createApp } from "./app.js";
-import { env } from "./config/env.js";
+import { connectTestDatabase } from "./utils/testDatabase.js";
 import { loginRateLimiter } from "./middleware/rateLimit.js";
 import { AuctionItem } from "./models/itemModel.js";
 import { Participant } from "./models/participantModel.js";
@@ -49,16 +49,8 @@ async function api(
 }
 
 before(async () => {
-  try {
-    await mongoose.connect(env.mongodbUri, {
-      serverSelectionTimeoutMS: 5_000,
-      dbName: env.mongodbDbName,
-    });
-    dbAvailable = true;
-  } catch {
-    dbAvailable = false;
-    return;
-  }
+  dbAvailable = await connectTestDatabase();
+  if (!dbAvailable) return;
 
   server = createServer(createApp());
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

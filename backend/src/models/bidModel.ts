@@ -6,6 +6,7 @@ export interface IBid extends Document {
   participantId: mongoose.Types.ObjectId;
   username: string;
   amount: number;
+  clientBidId?: string;
   createdAt: Date;
 }
 
@@ -36,6 +37,9 @@ const BidSchema = new Schema<IBid>(
       required: true,
       min: [0.01, "Bid amount must be positive."],
     },
+    clientBidId: {
+      type: String,
+    },
   },
   {
     timestamps: { createdAt: true, updatedAt: false },
@@ -43,5 +47,9 @@ const BidSchema = new Schema<IBid>(
 );
 
 BidSchema.index({ itemId: 1, createdAt: -1 });
+BidSchema.index(
+  { participantId: 1, clientBidId: 1 },
+  { unique: true, partialFilterExpression: { clientBidId: { $type: "string" } } },
+);
 
 export const Bid = mongoose.model<IBid>("Bid", BidSchema);

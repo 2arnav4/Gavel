@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { connectTestDatabase } from "../utils/testDatabase.js";
 import { AuctionItem } from "../models/itemModel.js";
 import { Room } from "../models/roomModel.js";
 import {
   clearAuctionTimer,
   hasAuctionTimer,
   restoreAuctionTimers,
+  startExpirySweep,
+  sweepExpiredItems,
 } from "./handlers/resolutionHandler.js";
 import { startHarness, type Harness } from "./testHarness.js";
 
@@ -16,16 +18,8 @@ let harness: Harness;
 const createdRooms: mongoose.Types.ObjectId[] = [];
 
 before(async () => {
-  try {
-    await mongoose.connect(env.mongodbUri, {
-      serverSelectionTimeoutMS: 5_000,
-      dbName: env.mongodbDbName,
-    });
-    dbAvailable = true;
-  } catch {
-    dbAvailable = false;
-    return;
-  }
+  dbAvailable = await connectTestDatabase();
+  if (!dbAvailable) return;
   harness = await startHarness();
 });
 
@@ -145,6 +139,68 @@ test("a live room with no stored deadline is given one rather than expiring inst
   assert.ok(room!.endsAt!.getTime() > Date.now(), "the new deadline must be in the future");
   assert.ok(item?.endsAt, "the item must be given the same deadline");
   assert.equal(item?.status, "active", "it must not resolve immediately");
+});
+
+test("an expired item whose timer was never scheduled is resolved by the sweep", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const { roomId, itemId } = await makeLiveRoom({ endsAt: new Date(Date.now() - 1_000), hasBidder: true });
+  clearAuctionTimer(roomId.toString());
+  assert.equal(hasAuctionTimer(roomId.toString()), false, "precondition: no timer owns this item");
+
+  const swept = await sweepExpiredItems(harness.io, { roomIds: [roomId] });
+
+  assert.equal(swept, 1);
+  assert.equal((await AuctionItem.findById(itemId))?.status, "sold");
+});
+
+test("the sweep leaves running, paused and future items alone", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const future = await makeLiveRoom({ endsAt: new Date(Date.now() + 60_000) });
+  const paused = await makeLiveRoom({ endsAt: null, isPaused: true });
+  clearAuctionTimer(future.roomId.toString());
+  clearAuctionTimer(paused.roomId.toString());
+
+  const swept = await sweepExpiredItems(harness.io, { roomIds: [future.roomId, paused.roomId] });
+
+  assert.equal(swept, 0);
+  assert.equal((await AuctionItem.findById(future.itemId))?.status, "active");
+  assert.equal((await AuctionItem.findById(paused.itemId))?.status, "active");
+});
+
+test("the background sweep resolves an orphaned item within a few ticks, and stops cleanly", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const { roomId, itemId } = await makeLiveRoom({ endsAt: new Date(Date.now() - 1_000) });
+  clearAuctionTimer(roomId.toString());
+
+  const stop = startExpirySweep(harness.io, 200, { roomIds: [roomId] });
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+  } finally {
+    stop();
+  }
+
+  assert.equal((await AuctionItem.findById(itemId))?.status, "unsold");
+});
+
+test("a sweep racing the in-process timer resolves the item exactly once", async (t) => {
+  if (!dbAvailable) return t.skip("no reachable MONGODB_URI");
+
+  const { roomId, itemId } = await makeLiveRoom({ endsAt: new Date(Date.now() - 1_000), hasBidder: true });
+  const before = (await AuctionItem.findById(itemId))!.version ?? 0;
+
+  await Promise.all([
+    restoreAuctionTimers(harness.io),
+    sweepExpiredItems(harness.io, { roomIds: [roomId] }),
+    sweepExpiredItems(harness.io, { roomIds: [roomId] }),
+  ]);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+
+  const item = await AuctionItem.findById(itemId);
+  assert.equal(item?.status, "sold");
+  assert.equal(item?.version, before + 1, "only one resolution may claim the item");
 });
 
 test("restore is idempotent — running it twice leaves one timer per room", async (t) => {

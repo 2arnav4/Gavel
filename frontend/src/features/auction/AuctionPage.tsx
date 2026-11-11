@@ -128,7 +128,8 @@ export function AuctionPage() {
       setBidVal("");
     };
 
-    const handleBidAccepted = (data: { bid: Bid }) => {
+    const handleBidAccepted = (data: { bid: Bid; duplicate?: boolean }) => {
+      if (data.duplicate) return;
       const msg = `Bid of ₹${data.bid.amount.toLocaleString()} accepted for ${data.bid.username}`;
       setActivityLogs((prev) => [...prev, `✔ ${msg}.`]);
       addToast(`New bid: ₹${data.bid.amount.toLocaleString()} by ${data.bid.username}`, "success");
@@ -195,7 +196,7 @@ export function AuctionPage() {
 
     const socket = getSocket();
     if (socket) {
-      socket.emit("bid:place", { amount: bidAmount });
+      socket.emit("bid:place", { amount: bidAmount, itemId: activeItem._id, bidId: crypto.randomUUID() });
     }
     setBidVal("");
   };

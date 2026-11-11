@@ -11,6 +11,7 @@ export interface IAuctionItem extends Document {
   status: "pending" | "active" | "sold" | "unsold";
   isPaused: boolean;
   endsAt?: Date | null;
+  version: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -66,6 +67,11 @@ const AuctionItemSchema = new Schema<IAuctionItem>(
       type: Date,
       default: null,
     },
+    version: {
+      type: Number,
+      default: 0,
+      required: true,
+    },
   },
   {
     timestamps: true,
@@ -74,6 +80,7 @@ const AuctionItemSchema = new Schema<IAuctionItem>(
 
 AuctionItemSchema.index({ roomId: 1, status: 1, createdAt: 1 });
 AuctionItemSchema.index({ roomId: 1, createdAt: 1 });
+AuctionItemSchema.index({ status: 1, endsAt: 1 });
 
 export const AuctionItem = mongoose.model<IAuctionItem>(
   "AuctionItem",

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { after, before } from "node:test";
 import mongoose from "mongoose";
-import { env } from "../config/env.js";
+import { connectTestDatabase } from "./testDatabase.js";
 import { AuctionItem } from "../models/itemModel.js";
 import { Room } from "../models/roomModel.js";
 import { Participant } from "../models/participantModel.js";
@@ -11,12 +11,9 @@ let dbAvailable = false;
 let roomId: mongoose.Types.ObjectId;
 
 before(async () => {
+  dbAvailable = await connectTestDatabase();
+  if (!dbAvailable) return;
   try {
-    await mongoose.connect(env.mongodbUri, {
-      serverSelectionTimeoutMS: 5_000,
-      dbName: env.mongodbDbName,
-    });
-    dbAvailable = true;
     const room = await Room.create({
       code: `T${Date.now().toString(36).slice(-5).toUpperCase()}`,
       name: "Concurrency Test Room",

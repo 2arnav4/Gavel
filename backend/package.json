@@ -10,10 +10,11 @@
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
     "seed": "npm run build && node dist/utils/seed.js",
-    "test": "npm run build && PRESENCE_GRACE_MS=400 node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js dist/socket/socketFailureTest.js dist/socket/presenceTest.js dist/socket/errorsTest.js dist/utils/passwordTest.js dist/socket/timerRestoreTest.js dist/restApiTest.js",
+    "test": "npm run build && PRESENCE_GRACE_MS=400 node --test dist/utils/auctionTest.js dist/utils/validationTest.js dist/utils/auctionConcurrencyTest.js dist/utils/rateLimitTest.js dist/socket/validationTest.js dist/utils/loggerTest.js dist/socket/socketFailureTest.js dist/socket/presenceTest.js dist/socket/errorsTest.js dist/utils/passwordTest.js dist/socket/timerRestoreTest.js dist/restApiTest.js dist/utils/testDatabaseTest.js dist/realtime/multiInstanceTest.js dist/realtime/redisRateLimiterTest.js dist/realtime/presenceStoreTest.js",
     "rotate-sessions": "npm run build && node dist/utils/rotateSessions.js"
   },
   "dependencies": {
+    "@socket.io/redis-streams-adapter": "0.3.1",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
@@ -24,6 +25,7 @@
     "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.7.4",
+    "redis": "6.3.0",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

@@ -64,7 +64,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
 
       const activeItem = await AuctionItem.findOneAndUpdate(
         { roomId: claimedRoom._id, status: "pending" },
-        { $set: { status: "active", isPaused: false, endsAt } },
+        { $set: { status: "active", isPaused: false, endsAt }, $inc: { version: 1 } },
         { new: true, sort: { createdAt: 1 } },
       );
 
@@ -100,6 +100,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         item: activeItem,
         startedAt: startedAt.toISOString(),
         endsAt: endsAt.toISOString(),
+        version: activeItem.version,
       });
 
       logger.info("Auction started", { roomCode, itemId: activeItem._id.toString() });
@@ -121,7 +122,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
           isPaused: false,
           endsAt: { $gt: new Date() },
         },
-        { $set: { isPaused: true, endsAt: null } },
+        { $set: { isPaused: true, endsAt: null }, $inc: { version: 1 } },
         { new: false },
       );
 
@@ -141,6 +142,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
       io.to(`room:${room.code}`).emit("auction:paused", {
         itemId: beforePause._id,
         remainingMs,
+        version: (beforePause.version ?? 0) + 1,
       });
 
       logger.info("Auction paused", { roomCode: room.code, remainingMs });
@@ -165,7 +167,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
 
       const resumedItem = await AuctionItem.findOneAndUpdate(
         { _id: room.currentItemId, status: "active", isPaused: true },
-        { $set: { isPaused: false, endsAt } },
+        { $set: { isPaused: false, endsAt }, $inc: { version: 1 } },
         { new: true },
       );
 
@@ -185,6 +187,7 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
         item: resumedItem,
         endsAt: endsAt.toISOString(),
         serverTime: new Date().toISOString(),
+        version: resumedItem.version,
       });
 
       logger.info("Auction resumed", { roomCode: room.code, remainingMs });

@@ -193,6 +193,7 @@ export interface AuctionItem {
   status: "pending" | "active" | "sold" | "unsold";
   isPaused?: boolean;
   endsAt?: string | null;
+  version?: number;
   createdAt: string;
   updatedAt: string;
 }

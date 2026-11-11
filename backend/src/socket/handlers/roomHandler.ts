@@ -5,13 +5,22 @@ import { Bid, type IBid } from "../../models/bidModel.js";
 import { Room } from "../../models/roomModel.js";
 import { env } from "../../config/env.js";
 import { logger } from "../../utils/logger.js";
-import { createPresenceTracker } from "../presence.js";
+import { createLocalPresenceStore, type PresenceStore } from "../../realtime/presenceStore.js";
 import type { SocketError } from "../errors.js";
 
 const PRESENCE_GRACE_MS = env.presenceGraceMs;
 
-const presence = createPresenceTracker();
+let presence: PresenceStore = createLocalPresenceStore();
 const pendingOffline = new Map<string, NodeJS.Timeout>();
+
+export function setPresenceStore(store: PresenceStore): void {
+  presence.close();
+  presence = store;
+}
+
+export function closePresenceStore(): void {
+  presence.close();
+}
 
 export function registerRoomHandlers(io: Server, socket: Socket): void {
   socket.on("room:connect", async () => {
@@ -36,7 +45,7 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       socket.join(socketRoomId);
 
       const participantKey = participant._id.toString();
-      const attachResult = presence.attach(participantKey, socket.id);
+      const attachResult = await presence.attach(participantKey, socket.id);
       socket.data.hasJoinedRoom = true;
 
       const reconnectedWithinGrace = pendingOffline.get(participantKey);
@@ -112,14 +121,14 @@ export function registerRoomHandlers(io: Server, socket: Socket): void {
       const socketRoomId = `room:${roomCode}`;
 
       const participantKey = participant._id.toString();
-      if (presence.detach(participantKey, socket.id) !== "last-socket") return;
+      if ((await presence.detach(participantKey, socket.id)) !== "last-socket") return;
       if (pendingOffline.has(participantKey)) return;
 
       const finalizeOffline = async (): Promise<void> => {
         pendingOffline.delete(participantKey);
-        if (presence.socketCount(participantKey) > 0) return;
 
         try {
+          if ((await presence.socketCount(participantKey)) > 0) return;
           await Participant.updateOne(
             { _id: participant._id },
             { $set: { isConnected: false } },
