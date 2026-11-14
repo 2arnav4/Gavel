@@ -147,3 +147,60 @@ export async function getRoomResults(code: string) {
 
   return items;
 }
+
+const ROSTER_LIMIT_MAX = 100;
+const ROSTER_LIMIT_DEFAULT = 50;
+const ROSTER_CURSOR = /^(\d{1,16})_([a-f0-9]{24})$/;
+
+export async function getRoomParticipants(code: string, cursor: unknown, limit: unknown) {
+  const normalizedCode = requireString(code, "Room code").toUpperCase();
+
+  let pageSize = ROSTER_LIMIT_DEFAULT;
+  if (limit !== undefined) {
+    const parsed = requirePositiveNumber(limit, "Limit");
+    if (!Number.isInteger(parsed)) {
+      throw new AppError("Limit must be a whole number.", 400);
+    }
+    pageSize = Math.min(parsed, ROSTER_LIMIT_MAX);
+  }
+
+  let after: { joinedAt: Date; id: string } | null = null;
+  if (cursor !== undefined) {
+    const match = ROSTER_CURSOR.exec(requireString(cursor, "Cursor", 48));
+    if (!match) {
+      throw new AppError("Cursor is not valid.", 400);
+    }
+    after = { joinedAt: new Date(Number(match[1])), id: match[2] };
+  }
+
+  const room = await Room.findOne({ code: normalizedCode });
+  if (!room) {
+    throw new AppError("Room not found", 404);
+  }
+
+  const filter: Record<string, unknown> = { roomId: room._id };
+  if (after) {
+    filter.$or = [
+      { joinedAt: { $gt: after.joinedAt } },
+      { joinedAt: after.joinedAt, _id: { $gt: after.id } },
+    ];
+  }
+
+  const rows = await Participant.find(filter)
+    .select("-sessionToken")
+    .sort({ joinedAt: 1, _id: 1 })
+    .limit(pageSize + 1)
+    .lean();
+
+  const participants = rows.slice(0, pageSize);
+  const last = participants[participants.length - 1];
+  const nextCursor = rows.length > pageSize && last
+    ? `${new Date(last.joinedAt).getTime()}_${last._id.toString()}`
+    : null;
+
+  return {
+    participants,
+    nextCursor,
+    participantCount: await Participant.countDocuments({ roomId: room._id }),
+  };
+}

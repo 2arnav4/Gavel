@@ -4,6 +4,7 @@ import {
   joinRoomHandler,
   getRoomHandler,
   getRoomResultsHandler,
+  getRoomParticipantsHandler,
 } from "../controllers/roomController.js";
 import { requireAuth } from "../middleware/authMiddleware.js";
 
@@ -14,3 +15,4 @@ roomRouter.post("/:code/join", requireAuth, joinRoomHandler);
 
 roomRouter.get("/:code", getRoomHandler);
 roomRouter.get("/:code/results", getRoomResultsHandler);
+roomRouter.get("/:code/participants", getRoomParticipantsHandler);

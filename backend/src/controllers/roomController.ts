@@ -67,3 +67,17 @@ export async function getRoomResultsHandler(
     next(error);
   }
 }
+
+export async function getRoomParticipantsHandler(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const code = req.params.code as string;
+    const result = await roomService.getRoomParticipants(code, req.query.cursor, req.query.limit);
+    res.status(200).json(result);
+  } catch (error) {
+    next(error);
+  }
+}

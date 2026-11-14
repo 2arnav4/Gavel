@@ -245,3 +245,29 @@ export async function getRoomResults(code: string): Promise<AuctionItem[]> {
 
   return response.json();
 }
+
+export interface RosterPage {
+  participants: Participant[];
+  nextCursor: string | null;
+  participantCount: number;
+}
+
+export async function getRoomParticipants(
+  code: string,
+  cursor: string | null,
+  limit = 100,
+): Promise<RosterPage> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (cursor) query.set("cursor", cursor);
+
+  const response = await fetch(`${API_URL}/rooms/${code.toUpperCase()}/participants?${query.toString()}`, {
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error ?? "Failed to load participants.");
+  }
+
+  return response.json();
+}

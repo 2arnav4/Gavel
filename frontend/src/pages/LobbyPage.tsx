@@ -40,6 +40,10 @@ export function LobbyPage() {
     status: socketStatus,
     room,
     participants,
+    participantCount,
+    hasMoreParticipants,
+    rosterLoading,
+    loadMoreParticipants,
     items,
     error: socketError,
   } = useSocket(code || "");
@@ -186,6 +190,7 @@ export function LobbyPage() {
 
   const isAdmin = sessionRole === "admin";
   const bidders = participants.filter((participant) => participant.role !== "admin");
+  const bidderCount = Math.max(bidders.length, participantCount - (participants.some((participant) => participant.role === "admin") ? 1 : 0));
 
   return (
     <PageContainer className="px-4 py-12 sm:px-6 sm:py-16">
@@ -497,7 +502,7 @@ export function LobbyPage() {
         <div className="border border-border bg-surface-raised/35 p-6 rounded-xl space-y-4 shadow-sm">
           <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary flex items-center gap-2 border-b border-border/40 pb-3">
             <Users className="h-3.5 w-3.5 text-accent" />
-            Lobby Bidders ({bidders.length})
+            Lobby Bidders ({bidderCount})
           </span>
 
           {bidders.length === 0 && (
@@ -550,6 +555,16 @@ export function LobbyPage() {
               </div>
             ))}
           </div>
+          {hasMoreParticipants && (
+            <button
+              type="button"
+              onClick={() => void loadMoreParticipants()}
+              disabled={rosterLoading}
+              className="w-full rounded-lg border border-border/60 bg-surface-overlay/30 px-3 py-2 text-xs font-medium text-text-secondary hover:text-text-primary disabled:opacity-50"
+            >
+              {rosterLoading ? "Loading…" : `Show more (${participants.length} of ${participantCount} shown)`}
+            </button>
+          )}
         </div>
       </div>
     </PageContainer>
