@@ -1,10 +1,12 @@
 import type { Server, Socket } from "socket.io";
+import mongoose from "mongoose";
 import { AuctionItem, type IAuctionItem } from "../../models/itemModel.js";
 import { Bid, type IBid } from "../../models/bidModel.js";
 import { Participant } from "../../models/participantModel.js";
-import { Room } from "../../models/roomModel.js";
-import { getMinimumBid, isValidPositiveAmount } from "../../utils/auction.js";
+import { Room, type IRoom } from "../../models/roomModel.js";
+import { getMinimumBid, isValidPositiveAmount, isWholeAmount } from "../../utils/auction.js";
 import { env } from "../../config/env.js";
+import { formatMoney } from "../../utils/currency.js";
 import { scheduleAuctionTimer } from "./resolutionHandler.js";
 import { createRateLimiter } from "../../utils/rateLimiter.js";
 import type { RateLimitCheck } from "../../realtime/redisRateLimiter.js";
@@ -33,8 +35,15 @@ async function replayAcceptedBid(
   participantId: IBid["participantId"],
   clientBidId: string,
   amount: number,
+  requestedItemId: string | undefined,
 ): Promise<boolean> {
-  const original = await Bid.findOne({ participantId, clientBidId });
+  if (requestedItemId !== undefined && !mongoose.isValidObjectId(requestedItemId)) return false;
+
+  const original = await Bid.findOne({
+    participantId,
+    clientBidId,
+    ...(requestedItemId !== undefined ? { itemId: requestedItemId } : {}),
+  });
   if (!original) return false;
 
   if (original.amount !== amount) {
@@ -51,6 +60,18 @@ async function replayAcceptedBid(
     duplicate: true,
   });
   return true;
+}
+
+async function extendRoomDeadline(
+  roomId: IRoom["_id"],
+  itemId: IAuctionItem["_id"],
+  endsAt: Date,
+): Promise<boolean> {
+  const result = await Room.updateOne(
+    { _id: roomId, status: "live", isPaused: false, currentItemId: itemId },
+    { $set: { endsAt } },
+  );
+  return result.matchedCount > 0;
 }
 
 export function registerBiddingHandlers(io: Server, socket: Socket): void {
@@ -116,13 +137,6 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
           } satisfies BidRejection);
           return;
         }
-        if (requestedItemId !== itemId.toString()) {
-          socket.emit("bid:rejected", {
-            code: "STALE_ITEM",
-            reason: "That bid was for an item that is no longer on the block.",
-          } satisfies BidRejection);
-          return;
-        }
       }
 
       let itemLoaded = false;
@@ -153,6 +167,15 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
         return;
       }
 
+      if (!isWholeAmount(amount)) {
+        socket.emit("bid:rejected", {
+          code: "INVALID_INPUT",
+          reason: "Bid amount must be a whole number, with no decimals.",
+          minimumBid: await readMinimumBid(),
+        } satisfies BidRejection);
+        return;
+      }
+
       const rawClientBidId = readEventField(data, "bidId");
       if (rawClientBidId !== undefined && (typeof rawClientBidId !== "string" || !CLIENT_BID_ID.test(rawClientBidId))) {
         socket.emit("bid:rejected", {
@@ -163,7 +186,17 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       }
       const clientBidId = rawClientBidId as string | undefined;
 
-      if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount)) {
+      const namedItemId = requestedItemId as string | undefined;
+
+      if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount, namedItemId)) {
+        return;
+      }
+
+      if (namedItemId !== undefined && namedItemId !== itemId.toString()) {
+        socket.emit("bid:rejected", {
+          code: "STALE_ITEM",
+          reason: "That bid was for an item that is no longer on the block.",
+        } satisfies BidRejection);
         return;
       }
 
@@ -180,7 +213,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       if (amount > remainingBudget) {
         socket.emit("bid:rejected", {
           code: "INSUFFICIENT_BUDGET",
-          reason: `That exceeds your remaining purse of ₹${remainingBudget.toLocaleString("en-IN")}.`,
+          reason: `That exceeds your remaining purse of ${formatMoney(remainingBudget, room.currency)}.`,
           minimumBid: await readMinimumBid(),
         } satisfies BidRejection);
         return;
@@ -215,7 +248,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       );
 
       if (!updatedItem) {
-        if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount)) {
+        if (clientBidId && await replayAcceptedBid(socket, participant._id, clientBidId, amount, namedItemId)) {
           return;
         }
 
@@ -239,7 +272,7 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
           ? { code: "AUCTION_PAUSED", reason: "Bidding is paused by the host." }
           : expired
             ? { code: "AUCTION_ENDED", reason: "Bidding time has expired for this item." }
-            : { code: "BID_TOO_LOW", reason: `Bid amount is too low. Minimum required: ₹${latestMinimumBid}` };
+            : { code: "BID_TOO_LOW", reason: `Bid amount is too low. Minimum required: ${formatMoney(latestMinimumBid, room.currency)}` };
 
         socket.emit("bid:rejected", {
           ...rejection,
@@ -259,20 +292,38 @@ export function registerBiddingHandlers(io: Server, socket: Socket): void {
       try {
         await newBid.save();
       } catch (error) {
-        if (!isDuplicateKeyError(error)) throw error;
-        logger.warn("Bid log entry skipped: bid id reused concurrently", {
-          roomCode,
-          participantId: participant._id.toString(),
-          amount,
-        });
+        if (isDuplicateKeyError(error)) {
+          logger.warn("Bid log entry skipped: bid id reused concurrently", {
+            roomCode,
+            participantId: participant._id.toString(),
+            amount,
+          });
+        } else {
+          logger.error("Accepted bid could not be written to the log", {
+            error,
+            roomCode,
+            itemId: itemId.toString(),
+            participantId: participant._id.toString(),
+            amount,
+            version: updatedItem.version,
+          });
+        }
       }
 
-      await Room.updateOne(
-        { _id: room._id },
-        { $set: { endsAt: newEndsAt } }
-      );
-      room.endsAt = newEndsAt;
-      scheduleAuctionTimer(io, room._id.toString(), newEndsAt);
+      try {
+        if (await extendRoomDeadline(room._id, itemId, newEndsAt)) {
+          room.endsAt = newEndsAt;
+          scheduleAuctionTimer(io, room._id.toString(), newEndsAt);
+        }
+      } catch (error) {
+        logger.error("Accepted bid could not extend the room deadline", {
+          error,
+          roomCode,
+          itemId: itemId.toString(),
+          endsAt: newEndsAt.toISOString(),
+        });
+        scheduleAuctionTimer(io, room._id.toString(), newEndsAt);
+      }
 
       io.to(socketRoomId).emit("bid:accepted", {
         bid: newBid,

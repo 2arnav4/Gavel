@@ -40,6 +40,16 @@ export function optionalString(
   return trimmed;
 }
 
+export function requireWholeAmount(value: unknown, fieldLabel: string): number {
+  const amount = requirePositiveNumber(value, fieldLabel);
+
+  if (!Number.isSafeInteger(amount)) {
+    throw new AppError(`${fieldLabel} must be a whole number, with no decimals.`, 400);
+  }
+
+  return amount;
+}
+
 export function requirePositiveNumber(value: unknown, fieldLabel: string): number {
   const parsed = typeof value === "string" ? Number(value.trim()) : value;
 

@@ -5,7 +5,8 @@ import { AuctionItem } from "../models/itemModel.js";
 import { generateUniqueRoomCode } from "../utils/codeGenerator.js";
 import { AppError } from "../middleware/errorHandler.js";
 import { env } from "../config/env.js";
-import { requirePositiveNumber, requireString } from "../utils/validation.js";
+import { requirePositiveNumber, requireString, requireWholeAmount } from "../utils/validation.js";
+import { normalizeCurrency } from "../utils/currency.js";
 
 function isDuplicateKeyError(error: unknown): boolean {
   return (
@@ -21,15 +22,16 @@ export async function createRoom(
   roomName: string,
   startingBudget?: number,
   minBidIncrement?: number,
+  currency?: unknown,
 ) {
   const hostName = requireString(username, "Username", 40);
   const name = requireString(roomName, "Room name", 60);
 
-  const budget = requirePositiveNumber(
+  const budget = requireWholeAmount(
     startingBudget ?? env.defaultStartingBudget,
     "Starting budget",
   );
-  const increment = requirePositiveNumber(
+  const increment = requireWholeAmount(
     minBidIncrement ?? env.defaultMinBidIncrement,
     "Minimum bid increment",
   );
@@ -40,6 +42,8 @@ export async function createRoom(
     );
   }
 
+  const roomCurrency = normalizeCurrency(currency);
+
   const code = await generateUniqueRoomCode();
 
   const room = new Room({
@@ -48,6 +52,7 @@ export async function createRoom(
     status: "lobby",
     startingBudget: budget,
     minBidIncrement: increment,
+    currency: roomCurrency,
   });
   await room.save();
 

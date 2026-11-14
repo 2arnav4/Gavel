@@ -4,6 +4,10 @@ export function isValidPositiveAmount(amount: unknown): amount is number {
   return typeof amount === "number" && Number.isFinite(amount) && amount > 0;
 }
 
+export function isWholeAmount(amount: number): boolean {
+  return Number.isSafeInteger(amount);
+}
+
 export function getAuctionEndsAt(now: number, durationSeconds: number): Date {
   return new Date(now + durationSeconds * 1000);
 }

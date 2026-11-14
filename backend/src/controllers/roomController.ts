@@ -8,7 +8,7 @@ export async function createRoomHandler(
   next: NextFunction
 ): Promise<void> {
   try {
-    const { roomName, startingBudget, minBidIncrement } = req.body;
+    const { roomName, startingBudget, minBidIncrement, currency } = req.body;
     const username = req.user?.username ?? "";
     const optionalNumber = (value: unknown) =>
       value === undefined || value === null || value === "" ? undefined : Number(value);
@@ -18,6 +18,7 @@ export async function createRoomHandler(
       roomName,
       optionalNumber(startingBudget),
       optionalNumber(minBidIncrement),
+      currency,
     );
     res.status(201).json(result);
   } catch (error) {

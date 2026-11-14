@@ -4,7 +4,7 @@ import { AuctionItem } from "../models/itemModel.js";
 import { AppError } from "../middleware/errorHandler.js";
 import {
   optionalString,
-  requirePositiveNumber,
+  requireWholeAmount,
   requireString,
 } from "../utils/validation.js";
 
@@ -25,7 +25,7 @@ export async function createAuctionItem(
   const normalizedCode = requireString(roomCode, "Room code").toUpperCase();
   const itemName = requireString(name, "Item name", ITEM_NAME_MAX_LENGTH);
   const itemDescription = optionalString(description, "Description", DESCRIPTION_MAX_LENGTH);
-  const price = requirePositiveNumber(startingBid, "Starting bid");
+  const price = requireWholeAmount(startingBid, "Starting bid");
 
   const room = await Room.findOne({ code: normalizedCode });
   if (!room) {

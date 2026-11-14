@@ -3,6 +3,7 @@ import { env } from "./env.js";
 import { logger } from "../utils/logger.js";
 import { Participant } from "../models/participantModel.js";
 import { Room } from "../models/roomModel.js";
+import { DEFAULT_CURRENCY } from "../utils/currency.js";
 
 const INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
@@ -51,6 +52,10 @@ async function migrateBudgets(): Promise<void> {
   await Room.collection.updateMany(
     { minBidIncrement: { $exists: false } },
     { $set: { minBidIncrement: env.defaultMinBidIncrement } },
+  );
+  await Room.collection.updateMany(
+    { currency: { $exists: false } },
+    { $set: { currency: DEFAULT_CURRENCY } },
   );
   await Participant.collection.updateMany(
     { budget: { $exists: false } },
