@@ -52,10 +52,64 @@ export async function sweepExpiredItems(io: Server, scope: SweepScope = {}): Pro
   };
   if (scope.roomIds) filter.roomId = { $in: scope.roomIds };
 
-  const expired = await AuctionItem.find(filter).select("roomId").limit(SWEEP_BATCH).lean();
+  const expired = await AuctionItem.find(filter)
+    .select("roomId")
+    .sort({ endsAt: 1 })
+    .limit(SWEEP_BATCH)
+    .lean();
   const roomIds = [...new Set(expired.map((item) => item.roomId.toString()))];
   await Promise.all(roomIds.map((roomId) => expireActiveItem(io, roomId)));
   return roomIds.length;
+}
+
+export const STUCK_AFTER_MS = 5_000;
+
+export async function recoverStuckRooms(io: Server, scope: SweepScope = {}): Promise<number> {
+  const settledBefore = new Date(Date.now() - STUCK_AFTER_MS);
+  const roomFilter: Record<string, unknown> = { status: "live", isPaused: false, updatedAt: { $lte: settledBefore } };
+  if (scope.roomIds) roomFilter._id = { $in: scope.roomIds };
+
+  const rooms = await Room.find(roomFilter).select("currentItemId").limit(SWEEP_BATCH).lean();
+  let recovered = 0;
+
+  for (const room of rooms) {
+    const roomId = room._id.toString();
+    const current = room.currentItemId
+      ? await AuctionItem.findById(room.currentItemId).select("status updatedAt").lean()
+      : null;
+
+    if (current?.status === "active") continue;
+    if (current && current.updatedAt > settledBefore) continue;
+
+    const orphan = await AuctionItem.findOne({ roomId: room._id, status: "active" })
+      .select("_id endsAt isPaused")
+      .lean();
+
+    if (orphan) {
+      const adopted = await Room.findOneAndUpdate(
+        { _id: room._id, status: "live", currentItemId: room.currentItemId ?? null },
+        { $set: { currentItemId: orphan._id, endsAt: orphan.endsAt ?? null } },
+        { new: true },
+      );
+      if (adopted && orphan.endsAt && !orphan.isPaused) scheduleAuctionTimer(io, roomId, orphan.endsAt);
+      if (adopted) {
+        recovered += 1;
+        logger.warn("Recovered a room pointing away from its active item", { roomId, itemId: orphan._id.toString() });
+      }
+      continue;
+    }
+
+    const advanced = await progressAuction(io, roomId, room.currentItemId ?? null);
+    if (advanced) {
+      recovered += 1;
+      logger.warn("Recovered a room stuck on a resolved item", {
+        roomId,
+        itemId: room.currentItemId?.toString() ?? null,
+      });
+    }
+  }
+
+  return recovered;
 }
 
 export function startExpirySweep(io: Server, intervalMs = 1_000, scope: SweepScope = {}): () => void {
@@ -64,6 +118,7 @@ export function startExpirySweep(io: Server, intervalMs = 1_000, scope: SweepSco
     if (running || !isDatabaseConnected()) return;
     running = true;
     sweepExpiredItems(io, scope)
+      .then(() => recoverStuckRooms(io, scope))
       .catch((error) => logger.error("Expiry sweep failed", { error }))
       .finally(() => {
         running = false;
@@ -88,16 +143,24 @@ export async function restoreAuctionTimers(io: Server): Promise<void> {
       await room.save();
       await AuctionItem.updateOne(
         { _id: room.currentItemId, status: "active" },
-        { $set: { endsAt }, $inc: { version: 1 } },
+        { $set: { endsAt } },
       );
     }
     scheduleAuctionTimer(io, room._id.toString(), endsAt);
   }
 }
 
-async function progressAuction(io: Server, roomId: string): Promise<void> {
-  const room = await Room.findById(roomId);
-  if (!room || room.status !== "live") return;
+async function progressAuction(
+  io: Server,
+  roomId: string,
+  fromItemId: unknown,
+): Promise<boolean> {
+  const room = await Room.findOneAndUpdate(
+    { _id: roomId, status: "live", currentItemId: fromItemId ?? null },
+    { $set: { currentItemId: null, endsAt: null, isPaused: false, pausedRemainingMs: null } },
+    { new: true },
+  );
+  if (!room) return false;
 
   const endsAt = getAuctionEndsAt(Date.now(), env.auctionItemDurationSeconds);
   const nextItem = await AuctionItem.findOneAndUpdate(
@@ -117,16 +180,16 @@ async function progressAuction(io: Server, roomId: string): Promise<void> {
 
     clearAuctionTimer(roomId);
     if (completedRoom) io.to(socketRoomId).emit("auction:completed", { room: completedRoom });
-    return;
+    return true;
   }
 
   const updatedRoom = await Room.findOneAndUpdate(
-    { _id: room._id, status: "live" },
+    { _id: room._id, status: "live", currentItemId: null },
     { $set: { currentItemId: nextItem._id, endsAt, isPaused: false, pausedRemainingMs: null } },
     { new: true },
   );
 
-  if (!updatedRoom) return;
+  if (!updatedRoom) return false;
 
   scheduleAuctionTimer(io, roomId, endsAt);
   io.to(socketRoomId).emit("item:activated", {
@@ -135,6 +198,7 @@ async function progressAuction(io: Server, roomId: string): Promise<void> {
     endsAt: endsAt.toISOString(),
     version: nextItem.version,
   });
+  return true;
 }
 
 async function resolveActiveItem(
@@ -175,11 +239,21 @@ async function resolveActiveItem(
 
   let winner = null;
   if (resolution === "sold" && resolvedItem.highestBidderId) {
-    winner = await Participant.findOneAndUpdate(
-      { _id: resolvedItem.highestBidderId },
-      { $inc: { spent: resolvedItem.currentBid } },
-      { new: true },
-    ).select("-sessionToken");
+    try {
+      winner = await Participant.findOneAndUpdate(
+        { _id: resolvedItem.highestBidderId },
+        { $inc: { spent: resolvedItem.currentBid } },
+        { new: true },
+      ).select("-sessionToken");
+    } catch (error) {
+      logger.error("Winner charge failed; reconcile this sale by hand", {
+        error,
+        roomId,
+        itemId: resolvedItem._id.toString(),
+        participantId: resolvedItem.highestBidderId.toString(),
+        amount: resolvedItem.currentBid,
+      });
+    }
   }
 
   clearAuctionTimer(roomId);
@@ -190,7 +264,7 @@ async function resolveActiveItem(
     winner,
     version: resolvedItem.version,
   });
-  await progressAuction(io, roomId);
+  await progressAuction(io, roomId, resolvedItem._id);
 
   return resolvedItem;
 }

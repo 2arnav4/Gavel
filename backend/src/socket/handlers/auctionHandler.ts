@@ -157,7 +157,8 @@ export function registerAuctionHandlers(io: Server, socket: Socket): void {
       const room = await requireHostRoom(socket);
       if (!room) return;
 
-      if (!room.isPaused) {
+      const pausedItem = await AuctionItem.findById(room.currentItemId).select("isPaused").lean();
+      if (!pausedItem?.isPaused) {
         socket.emit("error", { code: "AUCTION_NOT_PAUSED", message: "The auction is not paused." } satisfies SocketError);
         return;
       }
